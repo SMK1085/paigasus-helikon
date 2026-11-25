@@ -250,11 +250,11 @@ mod tests {
 
     #[test]
     fn clones_share_the_policy() {
-        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let m = offline_model("anthropic.claude-sonnet-4-6");
         let m2 = m.clone();
         assert!(m.policy.record_rejection());
         assert_eq!(m2.policy.path(), crate::policy::OutputPath::Native);
-        let fresh = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let fresh = offline_model("anthropic.claude-sonnet-4-6");
         assert_eq!(fresh.policy.path(), crate::policy::OutputPath::ForcedTool);
     }
 
@@ -262,7 +262,7 @@ mod tests {
     // `#[test]` that drives `invoke` on a second runtime.
     #[test]
     fn invoke_rejects_blank_only_request_before_network() {
-        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let m = offline_model("anthropic.claude-sonnet-4-6");
         let mut req = ModelRequest::new();
         req.messages = vec![paigasus_helikon_core::Item::UserMessage {
             content: vec![paigasus_helikon_core::ContentPart::Text {
@@ -286,20 +286,20 @@ mod tests {
 
     #[test]
     fn provider_returns_bedrock() {
-        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let m = offline_model("anthropic.claude-sonnet-4-6");
         assert_eq!(m.provider(), "bedrock");
     }
 
     #[test]
     fn model_returns_configured_id() {
-        let id = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+        let id = "anthropic.claude-sonnet-4-6";
         let m = offline_model(id);
         assert_eq!(m.model(), id);
     }
 
     #[test]
     fn capabilities_matches_caps_for_anthropic() {
-        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let m = offline_model("anthropic.claude-sonnet-4-6");
         let caps = m.capabilities();
         assert!(caps.streaming);
         assert!(caps.tools);
@@ -568,7 +568,7 @@ mod tests {
                 text: "hi".to_owned(),
             }],
         }];
-        let cfg = crate::builder::offline_config("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let cfg = crate::builder::offline_config("anthropic.claude-sonnet-4-6");
         crate::translate::build_request(&cfg, &req, crate::policy::OutputPath::ForcedTool).unwrap()
     }
 

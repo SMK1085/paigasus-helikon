@@ -18,7 +18,7 @@ expression: to_wire_json(&p)
       "role": "user"
     }
   ],
-  "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "modelId": "anthropic.claude-sonnet-4-6",
   "synthesizing": false,
   "system": [],
   "toolConfig": null

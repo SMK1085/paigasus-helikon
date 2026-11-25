@@ -3,7 +3,7 @@
 //! All tests are `#[ignore]` so they don't run in CI.
 //! Activate locally with:
 //! ```sh
-//! BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+//! BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-5-5 \
 //! AWS_DEFAULT_REGION=us-east-1 \
 //! cargo test -p paigasus-helikon-providers-bedrock -- --ignored
 //! ```

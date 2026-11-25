@@ -28,13 +28,15 @@ use paigasus_helikon_providers_bedrock::BedrockModel;
 // not during construction.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
+    let model = BedrockModel::from_env("global.anthropic.claude-sonnet-5-5").await?;
 
     // Pass `model` to LlmAgent::builder::<()>().model(model).
     // Everything downstream is provider-agnostic.
     Ok(())
 }
 ```
+
+The example uses a cross-region inference profile id (`global.`). Current Claude models on Bedrock need an inference profile id in place of a bare `anthropic.` id. Claude 3.x models are not supported.
 
 For explicit client construction (useful in tests or when you already have an `aws_config::SdkConfig`):
 

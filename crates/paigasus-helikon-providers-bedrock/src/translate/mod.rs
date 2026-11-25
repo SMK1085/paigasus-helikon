@@ -586,7 +586,7 @@ mod tests {
 
     /// A minimal Config for tests — uses a Claude model so synthesis works.
     fn claude_cfg() -> Config {
-        make_cfg("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        make_cfg("anthropic.claude-sonnet-4-6")
     }
 
     /// A Llama config for testing unsupported-family degradation.
@@ -664,7 +664,7 @@ mod tests {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
         let p = build(&claude_cfg(), &req).unwrap();
-        assert_eq!(p.model_id, "anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert_eq!(p.model_id, "anthropic.claude-sonnet-4-6");
         assert_eq!(p.messages.len(), 1);
         assert!(p.tool_config.is_none());
         assert!(!p.synthesizing);
@@ -847,7 +847,7 @@ mod tests {
         req.messages = vec![user_text("hello")];
         let p = build(&claude_cfg(), &req).unwrap();
         let w = to_wire_json(&p);
-        assert_eq!(w["modelId"], "anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert_eq!(w["modelId"], "anthropic.claude-sonnet-4-6");
         assert_eq!(w["messages"][0]["role"], "user");
         assert_eq!(w["messages"][0]["content"][0]["text"], "hello");
         assert!(!w["synthesizing"].as_bool().unwrap());
@@ -1040,7 +1040,7 @@ mod tests {
     fn builder_default_max_output_tokens_sets_max_tokens_on_wire() {
         // When only the builder default is set (no per-request value), the wire
         // must carry that default as maxTokens.
-        let family = ModelFamily::from_model_id("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let family = ModelFamily::from_model_id("anthropic.claude-sonnet-4-6");
         let capabilities = caps_for(family);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1056,7 +1056,7 @@ mod tests {
         });
         let cfg_with_default = Config {
             client,
-            model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_owned(),
+            model_id: "anthropic.claude-sonnet-4-6".to_owned(),
             family,
             capabilities,
             max_output_default: Some(2048),
@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn per_request_max_output_overrides_builder_default() {
         // Per-request value takes precedence over builder default.
-        let family = ModelFamily::from_model_id("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let family = ModelFamily::from_model_id("anthropic.claude-sonnet-4-6");
         let capabilities = caps_for(family);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1183,7 +1183,7 @@ mod tests {
         });
         let cfg_with_default = Config {
             client,
-            model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_owned(),
+            model_id: "anthropic.claude-sonnet-4-6".to_owned(),
             family,
             capabilities,
             max_output_default: Some(2048),

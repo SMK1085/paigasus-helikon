@@ -170,8 +170,10 @@ The simplest path loads AWS configuration from the standard credential chain:
 ```rust,ignore
 use paigasus_helikon::bedrock::BedrockModel;
 
-let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
+let model = BedrockModel::from_env("global.anthropic.claude-sonnet-5-5").await?;
 ```
+
+The example uses a cross-region inference profile id (`global.`). Current Claude models on Bedrock need an inference profile id in place of a bare `anthropic.` id. Claude 3.x models are not supported.
 
 `from_env` is `async` because it may fetch IMDS or SSO tokens. The credential
 chain is **lazy** — auth failures surface at `invoke()` time, not here.
@@ -245,7 +247,7 @@ Family detection reads the first segment of the model ID. If the first segment
 is not a provider name, detection reads the second segment. This skips a
 geographic prefix. The known prefixes are `us.`, `eu.`, `apac.`, `jp.`, `au.`,
 `ca.`, `in.` and `global.`. A future prefix works too. For example,
-`global.anthropic.claude-sonnet-4-5-20250929-v1:0` is identified as `Anthropic`.
+`global.anthropic.claude-sonnet-5-5` is identified as `Anthropic`.
 
 For an ARN, detection uses the resource ID, which is the text after the last
 `/`. An opaque ARN, such as an application inference profile ARN, gives
@@ -506,7 +508,7 @@ let model = OpenAiModel::chat("gpt-5-mini").build()?;
 let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 
 // Bedrock (async construction — loads the AWS credential chain)
-let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
+let model = BedrockModel::from_env("global.anthropic.claude-sonnet-5-5").await?;
 
 // Gemini Developer API
 let model = GeminiModel::from_env("gemini-3.8-flash")?;

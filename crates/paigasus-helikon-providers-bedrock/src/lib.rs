@@ -8,7 +8,7 @@
 //! ```ignore
 //! use paigasus_helikon_providers_bedrock::BedrockModel;
 //! # async fn f() -> Result<(), Box<dyn std::error::Error>> {
-//! let _model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
+//! let _model = BedrockModel::from_env("global.anthropic.claude-sonnet-5-5").await?;
 //! # Ok(()) }
 //! ```
 mod builder;
