@@ -2137,6 +2137,26 @@ mod tests {
         );
     }
 
+    /// A blank `args_delta` is the same call as a declared `{}`: a provider
+    /// that sends no argument text for a zero-argument tool conforms.
+    #[test]
+    fn blank_args_match_a_declared_empty_object() {
+        let mut events = conforming(Scenario::ZeroArgToolCallCleanStop);
+        set_args(&mut events, "c1", "");
+        let violation = crate::floor_violation(
+            Scenario::ZeroArgToolCallCleanStop,
+            &events,
+            crate::fakes::ZERO_ARG_TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            ZERO_ARG_CALLS,
+        );
+        assert!(
+            !matches!(violation, Some(Violation::ToolCallsMismatch { .. })),
+            "blank arguments must match a declared `{{}}`, got {violation:?}"
+        );
+    }
+
     /// A zero-argument scenario without declared calls compares nothing.
     #[test]
     fn a_zero_arg_scenario_without_declared_calls_fails() {

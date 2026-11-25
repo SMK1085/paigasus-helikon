@@ -10,6 +10,10 @@
 //! production transport, the SDK's own decoder parses these frames, and the
 //! production translator sees genuine `ConverseStreamOutput` values.
 //!
+//! The module also re-frames captured payloads byte for byte (`frame_raw`) and
+//! decodes captured frames (`decode_frames`), so a real Bedrock stream can be
+//! served unchanged.
+//!
 //! ## The silent-drop hazard
 //!
 //! `crates/paigasus-helikon-providers-bedrock/src/stream.rs` ends its `match`
@@ -42,7 +46,18 @@ use aws_smithy_types::event_stream::{Header, HeaderValue, Message};
 /// macro cannot build) or if the encoder rejects the message.
 pub fn frame(event_type: &str, payload: &serde_json::Value) -> Vec<u8> {
     let body = serde_json::to_vec(payload).expect("frame payload should serialise");
+    frame_raw(event_type, &body)
+}
 
+/// Encode one event as a complete frame, keeping the payload bytes as given.
+///
+/// Use this to serve a captured payload unchanged. Key order and spacing
+/// survive. The three headers are the same as in [`frame`].
+///
+/// # Panics
+///
+/// Panics if the encoder rejects the message.
+pub fn frame_raw(event_type: &str, payload: &[u8]) -> Vec<u8> {
     // All three headers are string headers, and all three are required: the
     // SDK's `parse_response_headers` errors without `:message-type`, dispatches
     // on `:event-type`, and the generated unmarshaller reads the payload as
@@ -61,12 +76,50 @@ pub fn frame(event_type: &str, payload: &serde_json::Value) -> Vec<u8> {
                 HeaderValue::String("application/json".into()),
             ),
         ],
-        body,
+        payload.to_vec(),
     );
 
     let mut buf = Vec::new();
     write_message_to(&message, &mut buf).expect("eventstream message should encode");
     buf
+}
+
+/// Decode concatenated eventstream frames into `(:event-type, payload)` pairs.
+///
+/// The pairs come in wire order.
+///
+/// # Panics
+///
+/// Panics if a frame does not decode, if the input ends inside a frame, or if
+/// bytes remain after the last whole frame.
+pub fn decode_frames(raw: &[u8]) -> Vec<(String, Vec<u8>)> {
+    use aws_smithy_eventstream::frame::{DecodedFrame, MessageFrameDecoder};
+
+    let mut decoder = MessageFrameDecoder::new();
+    let mut cursor = raw;
+    let mut frames = Vec::new();
+    while !cursor.is_empty() {
+        match decoder
+            .decode_frame(&mut cursor)
+            .expect("captured bytes should decode as eventstream frames")
+        {
+            DecodedFrame::Complete(message) => {
+                let event_type = message
+                    .headers()
+                    .iter()
+                    .find(|h| h.name().as_str() == ":event-type")
+                    .expect("every frame should carry an `:event-type` header")
+                    .value()
+                    .as_string()
+                    .expect("`:event-type` should be a string header")
+                    .as_str()
+                    .to_owned();
+                frames.push((event_type, message.payload().to_vec()));
+            }
+            DecodedFrame::Incomplete => panic!("the input ends inside a frame"),
+        }
+    }
+    frames
 }
 
 /// Build a real `BedrockModel` pointed at a local plain-HTTP endpoint.
@@ -129,6 +182,39 @@ mod tests {
     use paigasus_helikon_core::{
         CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest,
     };
+
+    /// A raw payload keeps its bytes, including key order and spacing.
+    #[test]
+    fn frame_raw_keeps_the_payload_bytes() {
+        let bytes = frame_raw("metadata", br#"{"b":1, "a":2}"#);
+        assert_eq!(
+            decode_frames(&bytes),
+            vec![("metadata".to_owned(), br#"{"b":1, "a":2}"#.to_vec())]
+        );
+    }
+
+    /// Two frames in one buffer decode in order.
+    #[test]
+    fn decode_frames_reads_two_concatenated_frames() {
+        let mut bytes = frame_raw("messageStart", b"{}");
+        bytes.extend(frame_raw("messageStop", b"{\"x\":1}"));
+        assert_eq!(
+            decode_frames(&bytes),
+            vec![
+                ("messageStart".to_owned(), b"{}".to_vec()),
+                ("messageStop".to_owned(), b"{\"x\":1}".to_vec()),
+            ]
+        );
+    }
+
+    /// `frame` is `frame_raw` over the serialised value.
+    #[test]
+    fn frame_is_frame_raw_of_the_serialised_value() {
+        assert_eq!(
+            frame("e", &serde_json::json!({"a":1})),
+            frame_raw("e", br#"{"a":1}"#)
+        );
+    }
 
     /// The AWS SDK must reach a local plain-HTTP endpoint, and hand-built
     /// eventstream frames must decode into real translator output.
