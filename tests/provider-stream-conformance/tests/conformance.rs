@@ -76,8 +76,11 @@ use serde_json::json;
 ///    `ConverseStreamOutputUnmarshaller` dispatches on
 ///    (`src/event_stream_serde.rs`). Per-shape references sit on each helper.
 ///
-/// Nothing here is transcribed from vendor documentation, and each shape comes
-/// from those two sources: a frame the SDK's decoder does not recognise is
+/// Nothing here is transcribed from vendor documentation. Each shape of the
+/// hand-authored scenarios comes from those two sources. The shapes of the
+/// captured scenario come from the wire. They have keys that no hand-authored
+/// helper uses: `p`, `toolUse.type` and `usage.serverToolUsage`. For the
+/// hand-authored scenarios: a frame the SDK's decoder does not recognise is
 /// dropped silently by the translator's forward-compat catch-all rather than
 /// rejected, so a shape from outside them would present as a translator bug
 /// and not as a bad fixture.
