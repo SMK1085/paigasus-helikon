@@ -132,6 +132,8 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 `AnthropicModel::messages(id)` returns an `AnthropicModelBuilder`; `build()`
 yields a `Result<AnthropicModel, BuildError>`.
 
+Claude 3.x models are not supported. A model id that the crate does not know reports a conservative capability set (streaming and tools). Use `.with_capabilities()` on the builder to set other values.
+
 Anthropic uses provider tool types. If a tool declares an `anthropic` type, the adapter sends the typed entry, for example `{"type": "memory_20250818", "name": "memory"}`, with no description and no input schema. To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic schema. See [Provider tool types](./tools.md#provider-tool-types).
 
 Anthropic thinking blocks round trip through provider data. The stream keeps each `thinking` and `redacted_thinking` block as a `ContentPart::ProviderData` part with the key `PROVIDER_DATA_KEY` (`"anthropic"`). The next request sends the eligible blocks back unchanged, and only with `Adaptive` or `Enabled`. The shape of the `data` is private.

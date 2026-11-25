@@ -38,7 +38,7 @@ async fn messages_smoke() {
     if skip_if_no_key() {
         return;
     }
-    let model = AnthropicModel::messages("claude-haiku-4-5")
+    let model = AnthropicModel::messages("claude-haiku-5-5")
         .build()
         .unwrap();
     let req = req_with(vec![user("Reply with exactly: hello")], |r| {
@@ -62,7 +62,7 @@ async fn structured_output_smoke() {
     if skip_if_no_key() {
         return;
     }
-    let model = AnthropicModel::messages("claude-haiku-4-5")
+    let model = AnthropicModel::messages("claude-haiku-5-5")
         .build()
         .unwrap();
     let req = req_with(vec![user("Give a Person named Ada.")], |r| {
