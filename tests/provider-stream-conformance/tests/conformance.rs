@@ -3215,6 +3215,10 @@ mod anthropic {
 ///   (`docs/superpowers/specs/2026-11-20-sma-827-gemini-thought-signatures-design.md:299`).
 ///   `ParallelToolCallCleanStop` sends all four of its payloads byte for byte
 ///   ([`PARALLEL_SIGNED`]); the script arm lists the edits.
+/// - `tests/provider-stream-conformance/fixtures/gemini/zero_arg_tool_call.raw`
+///   — CAPTURED (gemini-3.8-flash, 2026-11-24). `ZeroArgToolCallCleanStop`
+///   sends both of its payloads byte for byte ([`ZERO_ARG_CHUNKS`]), with CRLF
+///   frame endings.
 ///
 /// # Live capture — `ToolCallCleanStop`
 ///
@@ -3413,6 +3417,32 @@ mod gemini {
     fn captured_frame(payload: &str) -> Vec<u8> {
         format!("data: {payload}\n\n").into_bytes()
     }
+
+    /// One SSE frame around a payload of `zero_arg_tool_call.raw`, sent byte
+    /// for byte: `data: {payload}\r\n\r\n`. That capture has CRLF line
+    /// endings on the wire.
+    fn captured_frame_crlf(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\r\n\r\n").into_bytes()
+    }
+
+    /// The two `data:` payloads of `fixtures/gemini/zero_arg_tool_call.raw`,
+    /// byte for byte, in file order. The first keeps its real
+    /// `thoughtSignature`. See the `ZeroArgToolCallCleanStop` arm of [`script`]
+    /// for the provenance.
+    const ZERO_ARG_CHUNKS: [&str; 2] = [
+        r##"{"candidates": [{"content": {"parts": [{"functionCall": {"name": "get_current_time","args": {},"id": "call_15312425021673810944"},"thoughtSignature": "EvsCCvgCAWkUfRN4KWAsTtHg7IyaigsGASIrvbzyixovA+E9Y8pnO095GcTFcaNlKEXY5BqWZ0c1jBr+pb8s9TD0MQPcyPGSfn9SmnEVVO4e7Vul2wJRYPsEvBDxs6YjgcUAeeolbaBfk2He9U3aworlN6hxNnxCq+1ZcTJMIF0EbMd9W1sDIc95A9GAKAr0Av0BNwAX8RS9xvsv2sXv8mwSx2Rns2Oj7tNfnwp0C7Jk6OT8Y6x7yeZA9F0aL6FK4mJG2tN4Ft8jAHAJkj1/TOiTcvIdfc7sJc4H864lYnW88k+jrTwYkKzM3L9aJ7bfyhdc9taOyUTNMK+AL14GxlPvDTMWgi2Ez6IVURMUmgzS7sMcgwd8HJnDeFQT+7yFwjDRt+yFkJryNa3PalvCvvIPBCJWEqF4TjuSuQoK4LSio634kCp41xZZjkkZN0NJ1BPCeko8yjeW390rJyfJBs1ceiFIMAD/ek+ralcNR3wg47AZEhM01lkq+cwuLw=="}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 39,"candidatesTokenCount": 12,"totalTokenCount": 99,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 39}],"thoughtsTokenCount": 48,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "P_4Fa_fCD-qG28oPjou6gAQ"}"##,
+        r##"{"candidates": [{"content": {"parts": [{"text": ""}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 39,"candidatesTokenCount": 12,"totalTokenCount": 99,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 39}],"thoughtsTokenCount": 48,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "P_4Fa_fCD-qG28oPjou6gAQ"}"##,
+    ];
+
+    /// The one call of [`ZERO_ARG_CHUNKS`]: the tool name and empty arguments.
+    /// The wire sends `"args": {}`, not a missing `args`.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/gemini/zero_arg_tool_call.raw");
 
     /// One SSE frame: `data: {payload}\n\n`. Both recorded Gemini captures
     /// (the module doc's "Live capture" and `parallel_signed.sse`) have bare
@@ -3688,8 +3718,26 @@ mod gemini {
                 None,
                 Ending::Clean,
             ),
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/gemini/zero_arg_tool_call.raw`, CAPTURED from the
+            // Gemini Developer API (`streamGenerateContent?alt=sse`,
+            // `gemini-3.8-flash`) on 2026-11-24 at 21:14:44 UTC, with one
+            // zero-argument tool and a forced `tool_choice`. Chunk 0 holds one
+            // `functionCall` part with `"args": {}` and a real
+            // `thoughtSignature`. Chunk 1 holds an empty text part with
+            // `"finishReason": "STOP"`. The body ended at bare EOF, so no
+            // `[DONE]` is sent. The wire uses CRLF line endings.
+            //
+            // Edits made here: none to any payload. This script sends the two
+            // `data:` payloads byte for byte ([`ZERO_ARG_CHUNKS`]). Each one
+            // becomes one frame that ends with a CRLF blank line.
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_CHUNKS
+                    .iter()
+                    .map(|p| captured_frame_crlf(p))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -3727,6 +3775,17 @@ mod gemini {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         if scenario == Scenario::ParallelToolCallCleanStop {
             req.tools = vec![
@@ -3808,9 +3867,11 @@ mod gemini {
                 // distinct `finishReason` string.
                 // Capture 1's stop chunk carries the same `"STOP"` after three
                 // `functionCall` parts.
-                Scenario::ToolCallCleanStop | Scenario::ParallelToolCallCleanStop => {
-                    Some(FinishReason::ToolCalls)
-                }
+                // The zero-argument capture's stop chunk carries `"STOP"` after one
+                // `functionCall` part.
+                Scenario::ToolCallCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -3821,8 +3882,7 @@ mod gemini {
                 // Declined or uncaptured; never reached.
                 Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ReasoningCleanStop => None,
             }
         }
 
@@ -3839,6 +3899,8 @@ mod gemini {
                 // Capture 1's three calls, in wire order, with their captured
                 // arguments ([`PARALLEL_SIGNED`]).
                 Scenario::ParallelToolCallCleanStop => PARALLEL_CALLS,
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
                 Scenario::CleanStop
                 | Scenario::TruncatedAfterStopReason
                 | Scenario::TruncatedMidGeneration
@@ -3849,8 +3911,7 @@ mod gemini {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => &[],
+                | Scenario::ReasoningCleanStop => &[],
             }
         }
 
@@ -3863,11 +3924,6 @@ mod gemini {
             }
             if scenario == Scenario::ThinkingToolCallCleanStop {
                 return Outcome::Declined("the scenario serves an anthropic thinking block");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture
-            // of one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
             // `request` never sets a thinking configuration, so no thought
             // parts arrive on the wire.
@@ -3937,6 +3993,10 @@ mod gemini {
                 "Capture 1 unsigned functionCall chunk (Rome)",
                 captured_frame(PARALLEL_SIGNED[2]),
             ),
+            (
+                "zero-arg functionCall chunk",
+                captured_frame_crlf(ZERO_ARG_CHUNKS[0]),
+            ),
         ] {
             assert!(
                 !has_finish_reason(&frame),
@@ -3951,6 +4011,26 @@ mod gemini {
     #[test]
     fn gemini_parallel_script_encodes_its_stop_reason() {
         assert!(Gemini.encodes_stop_reason(Scenario::ParallelToolCallCleanStop));
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED from the Gemini Developer API at
+    /// `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse`.
+    /// The model is `gemini-3.8-flash`. The capture ran on 2026-11-24 at
+    /// 21:14:44 UTC. The file is `fixtures/gemini/zero_arg_tool_call.raw`. It
+    /// is 1383 bytes. Its SHA-256 is
+    /// `45271e2e2c96d08f183bec5251811498fee18b74c3cbfc92f9a2fc7c35542624`.
+    /// Findings: the wire uses CRLF line endings. The call has `"args": {}`,
+    /// not a missing `args`. An earlier capture without `parameters`
+    /// (20:39:23 UTC) is not committed.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 2);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]
