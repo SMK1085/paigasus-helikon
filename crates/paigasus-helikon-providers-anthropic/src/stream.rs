@@ -1434,9 +1434,9 @@ mod tests {
         ));
     }
 
-    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
-    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with the synthesis-mode structured-output tool in
+    /// place of the captured `get_current_time` tool.
     #[test]
     fn synthesized_tool_without_delta_emits_no_tool_call_delta() {
         let mut t = MessageTranslator::new(true);
