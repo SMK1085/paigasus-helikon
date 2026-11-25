@@ -160,38 +160,6 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
         "no captured parallel tool-call stream",
         "SMA-859",
     ),
-    // A zero-argument tool call can occur for each of these subjects, but
-    // only `openai/responses` has a capture of one.
-    (
-        "anthropic",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
-    (
-        "bedrock",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
-    (
-        "gemini",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
-    (
-        "litellm",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
-    (
-        "openai/chat",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
 ];
 
 /// The scenarios that [`UNCAPTURED`] may name. Moving an older scenario into
@@ -200,7 +168,6 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
 const UNCAPTURED_SCENARIOS: &[Scenario] = &[
     Scenario::ReasoningCleanStop,
     Scenario::ParallelToolCallCleanStop,
-    Scenario::ZeroArgToolCallCleanStop,
 ];
 
 /// The subject names registered in `tests/conformance.rs` — one `mod` per

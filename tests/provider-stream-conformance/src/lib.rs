@@ -64,7 +64,7 @@ pub enum Scenario {
     ReasoningCleanStop,
     /// Two or more complete tool calls, then a tool-use stop reason.
     ParallelToolCallCleanStop,
-    /// One complete tool call with no arguments (a `{}` delta), then a
+    /// One complete tool call with empty arguments (blank or `{}`), then a
     /// tool-use stop reason.
     ZeroArgToolCallCleanStop,
 }
@@ -1323,13 +1323,6 @@ mod tests {
         "no captured parallel tool-call stream",
     );
 
-    /// The pinned uncaptured pair every mock subject has for the zero-argument
-    /// scenario.
-    const ZERO_ARG_UNCAPTURED: (Scenario, &str) = (
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-    );
-
     /// The declines `bedrock` has in the pinned table.
     const BEDROCK_DECLINES: &[(Scenario, &str)] = &[
         (
@@ -1347,7 +1340,6 @@ mod tests {
     const BEDROCK_UNCAPTURED: &[(Scenario, &str)] = &[
         (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
         PARALLEL_UNCAPTURED,
-        ZERO_ARG_UNCAPTURED,
     ];
 
     /// The pinned (scenario, reason) pairs of one subject in one table.
@@ -1361,14 +1353,14 @@ mod tests {
             let (declines, uncaptured): (Pinned, Pinned) = match name {
                 "openai/chat" => (
                     &[THINKING_DECLINE, CHAT_REASONING_DECLINE],
-                    &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+                    &[PARALLEL_UNCAPTURED],
                 ),
                 "anthropic" => (
                     &[(
                         Scenario::FragmentedToolName,
                         "name arrives whole in content_block_start",
                     )],
-                    &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+                    &[PARALLEL_UNCAPTURED],
                 ),
                 "bedrock" => (BEDROCK_DECLINES, BEDROCK_UNCAPTURED),
                 other => panic!("the mock subject has no pinned rows for {other:?}"),
@@ -1823,11 +1815,7 @@ mod tests {
     #[should_panic(expected = "is pinned as uncaptured")]
     async fn a_pinned_uncaptured_pair_that_stopped_happening_fails() {
         let subject = Subject {
-            pinned_uncaptured: &[
-                (Scenario::CleanStop, "no capture yet"),
-                PARALLEL_UNCAPTURED,
-                ZERO_ARG_UNCAPTURED,
-            ],
+            pinned_uncaptured: &[(Scenario::CleanStop, "no capture yet"), PARALLEL_UNCAPTURED],
             ..Subject::conforming("openai/chat")
         };
         conforms_with_pinned(&subject).await;
@@ -1858,7 +1846,6 @@ mod tests {
                     "the scenario serves an anthropic thinking block",
                 ),
                 PARALLEL_UNCAPTURED,
-                ZERO_ARG_UNCAPTURED,
             ],
             ..Subject::conforming("openai/chat")
         };
@@ -2137,6 +2124,26 @@ mod tests {
         );
     }
 
+    /// A blank `args_delta` is the same call as a declared `{}`: a provider
+    /// that sends no argument text for a zero-argument tool conforms.
+    #[test]
+    fn blank_args_match_a_declared_empty_object() {
+        let mut events = conforming(Scenario::ZeroArgToolCallCleanStop);
+        set_args(&mut events, "c1", "");
+        let violation = crate::floor_violation(
+            Scenario::ZeroArgToolCallCleanStop,
+            &events,
+            crate::fakes::ZERO_ARG_TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            ZERO_ARG_CALLS,
+        );
+        assert!(
+            !matches!(violation, Some(Violation::ToolCallsMismatch { .. })),
+            "blank arguments must match a declared `{{}}`, got {violation:?}"
+        );
+    }
+
     /// A zero-argument scenario without declared calls compares nothing.
     #[test]
     fn a_zero_arg_scenario_without_declared_calls_fails() {
@@ -2240,7 +2247,7 @@ mod tests {
                 THINKING_DECLINE,
                 (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
             ],
-            uncaptured: &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+            uncaptured: &[PARALLEL_UNCAPTURED],
             ..Subject::conforming("bedrock")
         };
         let joined = tokio::spawn(async move { assert_conforms(&subject).await }).await;

@@ -1,0 +1,4 @@
+{"model":"zero-arg-anthropic","stream":true,"stream_options":{"include_usage":true},"max_tokens":256,
+ "tools":[{"type":"function","function":{"name":"get_current_time","description":"Return the current server time. Takes no arguments.","parameters":{"type":"object","properties":{}}}}],
+ "tool_choice":{"type":"function","function":{"name":"get_current_time"}},
+ "messages":[{"role":"user","content":"What time is it?"}]}

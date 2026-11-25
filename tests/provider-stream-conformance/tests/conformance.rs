@@ -37,11 +37,12 @@
 //! decodes the payload as a JSON object.
 
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolDef,
+    CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolChoice, ToolDef,
 };
 use paigasus_helikon_provider_stream_conformance::{
-    assert_conforms, eventstream::frame, Channel, Ending, ExpectedCall, Outcome, PacedServer,
-    Scenario, Script, StreamUnderTest,
+    assert_conforms,
+    eventstream::{decode_frames, frame, frame_raw},
+    Channel, Ending, ExpectedCall, Outcome, PacedServer, Scenario, Script, StreamUnderTest,
 };
 use serde_json::json;
 
@@ -50,13 +51,18 @@ use serde_json::json;
 ///
 /// # Fixture provenance
 ///
-/// Label: HAND-AUTHORED, from the vendored `aws-sdk-bedrockruntime` types and
-/// the translator's match arms. No helper here is a capture.
+/// Label: the `ZeroArgToolCallCleanStop` scenario is CAPTURED. Every other
+/// scenario is still HAND-AUTHORED, from the vendored `aws-sdk-bedrockruntime`
+/// types and the translator's match arms. One captured stream now exists, for
+/// the zero-argument scenario only. It is
+/// `fixtures/bedrock/zero_arg_tool_call.raw` (see [`ZERO_ARG_EVENTS`]). No
+/// helper function below is a capture.
 ///
-/// Bedrock is the one subject in this suite whose wire format is binary, and
-/// the repo holds no captured Bedrock traffic to transcribe. So — as the task
-/// brief directs when no capture exists — every event shape here is derived
-/// from two sources inside the workspace, and from nothing else:
+/// Bedrock is the one subject in this suite whose wire format is binary. The
+/// repo holds no captured Bedrock traffic for the other scenarios. So — as the
+/// task brief directs when no capture exists — every event shape of those
+/// scenarios is derived from two sources inside the workspace, and from
+/// nothing else:
 ///
 /// 1. **The translator's own match arms**, `providers-bedrock/src/stream.rs`.
 ///    Which `ConverseStreamOutput` variants matter, and what each one must
@@ -70,17 +76,22 @@ use serde_json::json;
 ///    `ConverseStreamOutputUnmarshaller` dispatches on
 ///    (`src/event_stream_serde.rs`). Per-shape references sit on each helper.
 ///
-/// Nothing here is transcribed from vendor documentation, and each shape comes
-/// from those two sources: a frame the SDK's decoder does not recognise is
+/// Nothing here is transcribed from vendor documentation. Each shape of the
+/// hand-authored scenarios comes from those two sources. The shapes of the
+/// captured scenario come from the wire. They have keys that no hand-authored
+/// helper uses: `p`, `toolUse.type` and `usage.serverToolUsage`. For the
+/// hand-authored scenarios: a frame the SDK's decoder does not recognise is
 /// dropped silently by the translator's forward-compat catch-all rather than
 /// rejected, so a shape from outside them would present as a translator bug
 /// and not as a bad fixture.
 ///
 /// The two sources give the keys and the event names. They do not give the
-/// event order or the values. No capture records the order of the events in a
-/// Bedrock stream. The numeric values in `metadata()` are arbitrary.
+/// event order or the values. The one capture records the order of the events
+/// for a zero-argument tool call: `metadata` comes after `messageStop`. No
+/// capture records the order for the other scenarios. The numeric values in
+/// `metadata()` are arbitrary.
 ///
-/// # Why there are no `.bin` fixture files
+/// # Why the hand-authored scripts have no `.bin` fixture files
 ///
 /// A `vnd.amazon.eventstream` frame is a length-prefixed header block wrapped
 /// in two CRC-32s, so a checked-in `.bin` would be neither reviewable nor
@@ -88,6 +99,11 @@ use serde_json::json;
 /// anything. `eventstream::frame` exists precisely to avoid that: it encodes
 /// each fixture with the same encoder the SDK itself uses, so the frame bytes
 /// come from the SDK's own encoder while the fixture stays readable as JSON.
+/// The captured stream is the one exception. Its `.raw` file holds the wire
+/// bytes. The script encodes [`ZERO_ARG_EVENTS`] with
+/// `eventstream::frame_raw`. The guard test
+/// `zero_arg_events_are_the_capture_frames` decodes the file and compares the
+/// payload bytes.
 mod bedrock {
     use super::*;
 
@@ -113,7 +129,8 @@ mod bedrock {
     ///
     /// The translator ignores it (`ConverseStreamOutput::MessageStart(_) => {}`);
     /// it is here because the script models a Converse stream that opens with
-    /// `messageStart`. No capture records that a real stream sends it first.
+    /// `messageStart`. The zero-argument capture confirms that a real stream
+    /// sends it first.
     /// Key: `role` (`shape_message_start_event.rs`), value from
     /// `ConversationRole` (`_conversation_role.rs`: `"assistant"`).
     fn message_start() -> Vec<u8> {
@@ -168,8 +185,8 @@ mod bedrock {
 
     /// `contentBlockStop`, which closes a content block. Ignored by the
     /// translator (`ConverseStreamOutput::ContentBlockStop(_) => {}`), included
-    /// so that the script closes each block it opens. No capture records that
-    /// a real stream closes every block. Key: `contentBlockIndex`
+    /// so that the script closes each block it opens. The zero-argument
+    /// capture confirms that a real stream closes its block. Key: `contentBlockIndex`
     /// (`shape_content_block_stop_event.rs`).
     fn content_block_stop() -> Vec<u8> {
         frame("contentBlockStop", &json!({ "contentBlockIndex": 0 }))
@@ -187,9 +204,9 @@ mod bedrock {
 
     /// `metadata`, the only event carrying usage. The scripts send it **after**
     /// `messageStop`. The translator buffers the stop reason instead of
-    /// emitting `Finish` on the spot so that it can handle this order. No
-    /// capture records that a real Bedrock stream sends `metadata` after
-    /// `messageStop`.
+    /// emitting `Finish` on the spot so that it can handle this order. The
+    /// zero-argument capture records that a real Bedrock stream sends
+    /// `metadata` after `messageStop`.
     ///
     /// **This ordering is not self-enforced by the translator.**
     /// `assert_message_stop_before_metadata` enforces it for every script.
@@ -216,12 +233,55 @@ mod bedrock {
         )
     }
 
+    /// The six events of `fixtures/bedrock/zero_arg_tool_call.raw`, as
+    /// (`:event-type`, payload) pairs, byte for byte, in file order. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance. Each
+    /// payload keeps its `"p"` padding field.
+    const ZERO_ARG_EVENTS: [(&str, &str); 6] = [
+        (
+            "messageStart",
+            r##"{"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY","role":"assistant"}"##,
+        ),
+        (
+            "contentBlockStart",
+            r##"{"contentBlockIndex":0,"p":"abcde","start":{"toolUse":{"name":"get_current_time","toolUseId":"tooluse_kiuoEhT6WJIVsi1t2fq6PV","type":"tool_use"}}}"##,
+        ),
+        (
+            "contentBlockDelta",
+            r##"{"contentBlockIndex":0,"delta":{"toolUse":{"input":""}},"p":"abcdefghijklmnopqrstuvwxyzABCDEFGH"}"##,
+        ),
+        (
+            "contentBlockStop",
+            r##"{"contentBlockIndex":0,"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123"}"##,
+        ),
+        (
+            "messageStop",
+            r##"{"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ","stopReason":"tool_use"}"##,
+        ),
+        (
+            "metadata",
+            r##"{"metrics":{"latencyMs":493},"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX","usage":{"inputTokens":485,"outputTokens":11,"serverToolUsage":{},"totalTokens":496}}"##,
+        ),
+    ];
+
+    /// The one call of [`ZERO_ARG_EVENTS`]: the tool name and empty arguments.
+    /// The wire sends one `toolUse.input` delta with the empty string.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/bedrock/zero_arg_tool_call.raw");
+
     /// The scripted response for one scenario, or `None` for a scenario this
     /// subject declines or has no capture for (an uncaptured scenario).
     ///
-    /// Each script is the same Converse stream cut at a different point, so the
-    /// scenarios differ only in what the client gets to observe — which is
-    /// exactly the distinction the suite is checking.
+    /// Each hand-authored script is the same Converse stream cut at a
+    /// different point, so those scenarios differ only in what the client gets
+    /// to observe — which is exactly the distinction the suite is checking.
+    /// `ZeroArgToolCallCleanStop` is the exception. It is a different,
+    /// captured stream.
     ///
     /// Returning an `Option` rather than panicking on the declined or uncaptured
     /// scenarios is what lets [`Bedrock::encodes_stop_reason`] call this for *every*
@@ -291,8 +351,29 @@ mod bedrock {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/bedrock/zero_arg_tool_call.raw`, CAPTURED from the
+            // Bedrock Runtime `converse-stream` endpoint (inference profile
+            // `eu.anthropic.claude-haiku-5-5`, `eu-central-1`) on 2026-11-24
+            // at 20:39:45 UTC, with one zero-argument tool and a forced
+            // `tool_choice`. The stream has six events: `messageStart`,
+            // `contentBlockStart`, one `contentBlockDelta` with
+            // `toolUse.input` set to the empty string, `contentBlockStop`,
+            // `messageStop` and `metadata`. `metadata` comes after
+            // `messageStop`, so this capture records that order.
+            //
+            // Edits made here: the suite encodes the prelude, the header block
+            // and the CRCs again. The header order is `:message-type`,
+            // `:event-type`, `:content-type`. The capture has `:event-type`,
+            // `:content-type`, `:message-type`. The payload bytes are
+            // unchanged ([`ZERO_ARG_EVENTS`]).
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_EVENTS
+                    .iter()
+                    .map(|(event, payload)| frame_raw(event, payload.as_bytes()))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -317,6 +398,17 @@ mod bedrock {
                 text: "What is the weather in Berlin?".into(),
             }],
         }];
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
+        }
         // `ToolCallCleanStop` only: `FragmentedToolName` is the subject's other
         // tool scenario, but it is declined and so never reaches this function.
         if matches!(scenario, Scenario::ToolCallCleanStop) {
@@ -440,7 +532,10 @@ mod bedrock {
                 // `"tool_use"` maps to `StopReason::ToolUse` and then to
                 // `FinishReason::ToolCalls`, since this request is not a
                 // structured-output synthesis.
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // The zero-argument capture's `messageStop` carries `"tool_use"`.
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -452,8 +547,7 @@ mod bedrock {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -463,9 +557,13 @@ mod bedrock {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                // No other scenario this subject serves declares calls.
+                _ => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -498,11 +596,6 @@ mod bedrock {
                 // of them exists (SMA-859).
                 Scenario::ParallelToolCallCleanStop => {
                     return Outcome::Uncaptured("no captured parallel tool-call stream")
-                }
-                // A zero-argument tool call can occur on this wire, but no
-                // capture of one exists (SMA-860).
-                Scenario::ZeroArgToolCallCleanStop => {
-                    return Outcome::Uncaptured("no captured zero-argument tool-call stream")
                 }
                 _ => {}
             }
@@ -603,6 +696,26 @@ mod bedrock {
             ("contentBlockDelta/toolUse", tool_use_delta("{\"city\":")),
             ("contentBlockStop", content_block_stop()),
             ("metadata", metadata()),
+            (
+                "zero-arg messageStart",
+                frame_raw(ZERO_ARG_EVENTS[0].0, ZERO_ARG_EVENTS[0].1.as_bytes()),
+            ),
+            (
+                "zero-arg contentBlockStart",
+                frame_raw(ZERO_ARG_EVENTS[1].0, ZERO_ARG_EVENTS[1].1.as_bytes()),
+            ),
+            (
+                "zero-arg contentBlockDelta",
+                frame_raw(ZERO_ARG_EVENTS[2].0, ZERO_ARG_EVENTS[2].1.as_bytes()),
+            ),
+            (
+                "zero-arg contentBlockStop",
+                frame_raw(ZERO_ARG_EVENTS[3].0, ZERO_ARG_EVENTS[3].1.as_bytes()),
+            ),
+            (
+                "zero-arg metadata",
+                frame_raw(ZERO_ARG_EVENTS[5].0, ZERO_ARG_EVENTS[5].1.as_bytes()),
+            ),
         ] {
             assert!(
                 !contains(&frame, marker),
@@ -648,6 +761,39 @@ mod bedrock {
         );
     }
 
+    /// The script is the capture: the same events, with the same payload
+    /// bytes.
+    ///
+    /// Provenance: CAPTURED from the Bedrock Runtime endpoint
+    /// `https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-haiku-5-5/converse-stream`
+    /// with `curl --aws-sigv4`. The model is the inference profile
+    /// `eu.anthropic.claude-haiku-5-5`. The capture ran on 2026-11-24 at
+    /// 20:39:45 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.request.json`.
+    /// The file is `fixtures/bedrock/zero_arg_tool_call.raw`. It
+    /// is 1250 bytes. Its SHA-256 is
+    /// `9196618e83783e261b5a3997d81a8cb343ff58bb1c560bff611a53c0d6a98b04`.
+    /// Finding: the tool call has one `toolUse.input` delta with the empty
+    /// string `""`.
+    ///
+    /// The suite encodes the frames again, so the test compares the decoded
+    /// events (type and payload bytes) and not the raw bytes.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_events_are_the_capture_frames() {
+        let captured = decode_frames(ZERO_ARG_RAW);
+        let copied: Vec<(String, Vec<u8>)> = ZERO_ARG_EVENTS
+            .iter()
+            .map(|(e, p)| ((*e).to_owned(), p.as_bytes().to_vec()))
+            .collect();
+        assert_eq!(captured.len(), 6);
+        assert_eq!(copied, captured);
+
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(decode_frames(&script.chunks.concat()), captured);
+    }
+
     #[tokio::test]
     async fn conforms() {
         assert_conforms(&Bedrock).await;
@@ -669,8 +815,9 @@ mod bedrock {
 ///
 /// Every envelope shape below is transcribed from a committed fixture in this
 /// workspace, cited on the helper that builds it. Each source is either a
-/// capture through a LiteLLM proxy or a hand-authored file. No capture of
-/// `api.openai.com` Chat Completions is recorded in the repo.
+/// capture through a LiteLLM proxy, a hand-authored file, or the recorded
+/// `api.openai.com` Chat Completions stream for the zero-argument call
+/// (SMA-860, `fixtures/openai_chat/zero_arg_tool_call.raw`).
 ///
 /// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_text_usage_trailing.txt`
 ///   — CAPTURED with named reconstructed parts, through a LiteLLM proxy with
@@ -679,8 +826,9 @@ mod bedrock {
 /// - `crates/paigasus-helikon-providers-openai/tests/chat_wire.rs`'s
 ///   `happy_path_text_completion` fixture body — HAND-AUTHORED. It is the
 ///   source of the explicit `"finish_reason":null` that [`text_delta`] sends
-///   on each content delta. No recorded capture sends that key on a content
-///   delta: the LiteLLM captures omit it. The null is exactly the shape
+///   on each content delta. The recorded `api.openai.com` capture
+///   (SMA-860) sends that key on its tool-call chunks. It has no text
+///   content delta. The LiteLLM captures omit it. The null is exactly the shape
 ///   [`OpenAiChat::encodes_stop_reason`]'s marker must not match.
 /// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_parallel_tool_calls.txt`
 ///   — HAND-AUTHORED (SMA-316, PR #30). The tool-call envelope: `id`/`name`
@@ -794,9 +942,11 @@ mod openai_chat {
     /// `choices[].delta.content`) matches the content-delta chunks in
     /// `chat_text_usage_trailing.txt`. The explicit `"finish_reason":null`
     /// comes from `tests/chat_wire.rs`'s `happy_path_text_completion` body,
-    /// which is HAND-AUTHORED. No recorded capture sends this key on a
-    /// content delta: `chat_text_usage_trailing.txt` and the LiteLLM captures
-    /// omit it. The null stays on purpose. It is the frame
+    /// which is HAND-AUTHORED. The recorded `api.openai.com` capture
+    /// (SMA-860) sends this key on its tool-call chunks. It has no text
+    /// content delta. `chat_text_usage_trailing.txt` and the LiteLLM
+    /// captures omit it.
+    /// The null stays on purpose. It is the frame
     /// `scan_finds_only_a_populated_finish_reason` uses to prove the marker
     /// does not fire on a null value.
     ///
@@ -928,6 +1078,32 @@ mod openai_chat {
         }))
     }
 
+    /// The five `data:` values of `fixtures/openai_chat/zero_arg_tool_call.raw`,
+    /// byte for byte, in file order. The last is `[DONE]`. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_CHUNKS: [&str; 5] = [
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_XHHS5dpxrpSbtNSmMIlKra2i","type":"function","function":{"name":"get_current_time","arguments":""}}],"refusal":null},"finish_reason":null}],"usage":null,"obfuscation":"ljR0UWZNjpG"}"##,
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}],"usage":null,"obfuscation":"e4rivpQ9NuI"}"##,
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":null,"obfuscation":"2HaYtdPdrxy"}"##,
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[],"usage":{"prompt_tokens":128,"completion_tokens":148,"total_tokens":276,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":128,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}},"obfuscation":"T"}"##,
+        r##"[DONE]"##,
+    ];
+
+    /// The one call of [`ZERO_ARG_CHUNKS`]: the tool name and the literal `{}`
+    /// that the API streams as its arguments.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/openai_chat/zero_arg_tool_call.raw");
+
+    /// One captured SSE frame: `data: {payload}\n\n`.
+    fn captured_frame(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
@@ -1034,8 +1210,22 @@ mod openai_chat {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/openai_chat/zero_arg_tool_call.raw`, CAPTURED against
+            // the real OpenAI Chat Completions API (`gpt-5-mini`, wire model
+            // `gpt-5-mini-2025-08-07`, 2026-11-24 20:39:21 UTC) with one
+            // zero-argument tool and a forced `tool_choice` (request:
+            // `fixtures/openai_chat/zero_arg_tool_call.request.json`). The API
+            // streams the arguments as `""` and then as the literal `{}`.
+            // Five frames: the tool-call start, the `{}` delta, the finish
+            // chunk, the usage chunk and `[DONE]`.
+            //
+            // Edits made here: none to any payload. The script sends the five
+            // `data:` values byte for byte ([`ZERO_ARG_CHUNKS`]). Each one
+            // becomes one `data:` frame that ends with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => {
+                let chunks = ZERO_ARG_CHUNKS.iter().map(|p| captured_frame(p)).collect();
+                (chunks, None, Ending::Clean)
+            }
         };
 
         Some(Script {
@@ -1071,6 +1261,17 @@ mod openai_chat {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         req
     }
@@ -1121,7 +1322,9 @@ mod openai_chat {
                 Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
                     Some(FinishReason::Stop)
                 }
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely, and so — per the module doc's
                 // "FragmentedToolName deliberately never completes" section —
@@ -1135,8 +1338,7 @@ mod openai_chat {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -1146,9 +1348,12 @@ mod openai_chat {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                _ => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -1163,11 +1368,6 @@ mod openai_chat {
             // fixture of them is hand-authored, not captured (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture of
-            // one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1214,6 +1414,7 @@ mod openai_chat {
                 tool_call_name_fragment("weather"),
             ),
             ("tool_call args", tool_call_args("{\"city\":\"Berlin\"}")),
+            ("zero-arg tool chunk", captured_frame(ZERO_ARG_CHUNKS[1])),
         ] {
             assert!(
                 !contains(&frame, FINISH_REASON_MARKER),
@@ -1223,6 +1424,25 @@ mod openai_chat {
                  value."
             );
         }
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED against `https://api.openai.com/v1/chat/completions`
+    /// with `gpt-5-mini` (wire model `gpt-5-mini-2025-08-07`) on 2026-11-24
+    /// at 20:39:21 UTC. The request is
+    /// `fixtures/openai_chat/zero_arg_tool_call.request.json`. The file is
+    /// 1618 bytes. Its SHA-256 is
+    /// `5c5e74ac372aa0f954e89801c0addb62592a1ae02ad3c36b427b4d24f56d8cf2`.
+    /// Finding: the API streams the arguments as the delta `""` and then as
+    /// the delta `"{}"`.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 5);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]
@@ -1252,7 +1472,8 @@ mod openai_chat {
 ///
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-litellm/tests/fixtures/`, cited on the
-/// helper that builds it:
+/// helper that builds it. The one exception is the last bullet. It names a
+/// capture that this test crate owns:
 ///
 /// - `text_then_trailing_usage.txt` — CAPTURED with named reconstructed
 ///   parts, from LiteLLM 1.97.0 with a keyless `mock_response` (SMA-451,
@@ -1280,6 +1501,10 @@ mod openai_chat {
 /// - `truncated_no_finish.txt` — HAND-AUTHORED (SMA-451, PR #199). Grounds
 ///   the shape "content delta(s), then the body simply ends" with no
 ///   `finish_reason` chunk anywhere. No capture of this case is recorded.
+/// - `tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.raw`
+///   — CAPTURED (LiteLLM 1.98.0 proxy, 2026-11-24). `ZeroArgToolCallCleanStop`
+///   sends all six `data:` values byte for byte ([`ZERO_ARG_CHUNKS`]). The
+///   request and the proxy config sit next to it.
 ///
 /// `unknown_finish_reason.txt` (HAND-AUTHORED) was read but contributes no
 /// shape this module needs: this subject serves only `Stop` and `ToolCalls`
@@ -1513,6 +1738,33 @@ mod litellm {
         }))
     }
 
+    /// The six `data:` values of `fixtures/litellm/zero_arg_tool_call.raw`,
+    /// byte for byte, in file order. The last is `[DONE]`. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_CHUNKS: [&str; 6] = [
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","role":"assistant","tool_calls":[{"id":"toolu_01Ph5aTG6RG9RAhP9Q6F3Hmg","function":{"arguments":"","name":"get_current_time"},"type":"function","index":0,"caller":{"type":"direct"}}]}}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"function":{"arguments":""},"type":"function","index":0}]}}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"function":{"arguments":"{}"},"type":"function","index":0}]}}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","object":"chat.completion.chunk","created":1795553946,"model":"zero-arg-anthropic","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{}}],"usage":{"completion_tokens":11,"prompt_tokens":485,"total_tokens":496,"completion_tokens_details":{"reasoning_tokens":0,"text_tokens":11},"prompt_tokens_details":{"cached_tokens":0,"text_tokens":485,"cache_write_tokens":0,"cache_creation_tokens":0,"cache_creation_token_details":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"inference_geo":"global"}}"##,
+        r##"[DONE]"##,
+    ];
+
+    /// The one call of [`ZERO_ARG_CHUNKS`]: the tool name and the literal `{}`
+    /// that the proxy streams as its arguments.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/litellm/zero_arg_tool_call.raw");
+
+    /// One captured SSE frame: `data: {payload}\n\n`.
+    fn captured_frame(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
@@ -1620,8 +1872,27 @@ mod litellm {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/litellm/zero_arg_tool_call.raw`, CAPTURED from a
+            // LiteLLM 1.98.0 proxy (`ghcr.io/berriai/litellm@sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305`)
+            // on `/v1/chat/completions`, 2026-11-24 20:59:06 UTC. The wire
+            // `model` is the proxy alias `zero-arg-anthropic`. It routes to
+            // the upstream `anthropic/claude-haiku-5-5`. The request and the
+            // proxy config are in `fixtures/litellm/`. The proxy streams the
+            // arguments as `""`, `""` and then the literal `{}`. Six frames:
+            // the tool-call start, an empty argument delta, the `{}` delta,
+            // the finish chunk, the usage chunk and `[DONE]`.
+            //
+            // Edits made here: none to any payload. The script sends the six
+            // `data:` values byte for byte ([`ZERO_ARG_CHUNKS`]). Each one
+            // becomes one `data:` frame that ends with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => {
+                let chunks = ZERO_ARG_CHUNKS
+                    .iter()
+                    .copied()
+                    .map(captured_frame)
+                    .collect();
+                (chunks, None, Ending::Clean)
+            }
         };
 
         Some(Script {
@@ -1657,6 +1928,17 @@ mod litellm {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         req
     }
@@ -1705,7 +1987,9 @@ mod litellm {
                 Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
                     Some(FinishReason::Stop)
                 }
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely, and so must `FragmentedToolName`, whose
                 // script ends before any finish_reason chunk arrives.
@@ -1717,8 +2001,7 @@ mod litellm {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -1728,9 +2011,12 @@ mod litellm {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                _ => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -1746,11 +2032,6 @@ mod litellm {
             // them exists (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture of
-            // one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1821,6 +2102,7 @@ mod litellm {
                 tool_call_name_fragment("weather"),
             ),
             ("tool_call args", tool_call_args("{\"city\":\"Berlin\"}")),
+            ("zero-arg tool chunk", captured_frame(ZERO_ARG_CHUNKS[2])),
         ] {
             assert!(
                 !contains(&frame, FINISH_REASON_MARKER),
@@ -1830,6 +2112,31 @@ mod litellm {
                  that null value."
             );
         }
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED from the LiteLLM 1.98.0 proxy
+    /// `ghcr.io/berriai/litellm@sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305`
+    /// at `/v1/chat/completions`. The wire `model` is the proxy alias
+    /// `zero-arg-anthropic`. The upstream model is `anthropic/claude-haiku-5-5`.
+    /// The capture ran on 2026-11-24 at 20:59:06 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.request.json`.
+    /// The proxy config is
+    /// `tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.litellm_config.yaml`.
+    /// The file is 1739 bytes. Its
+    /// SHA-256 is
+    /// `b81bc790cdcf6a93e1ef6e8391a353a344d95549ef08a412ee0f7c1f241552c7`.
+    /// Finding: the proxy streams the arguments as the deltas `""`, `""` and
+    /// `"{}"`. The upstream call was not captured. So the source of the `{}`
+    /// is an inference (spec section 4, finding 5).
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 6);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]
@@ -1855,10 +2162,14 @@ mod litellm {
 ///
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-anthropic/tests/fixtures/`, cited on the
-/// helper or script arm that builds it. Each fixture header states its label.
+/// helper or script arm that builds it. The last bullet is the one exception.
+/// It names a capture that this test crate owns. Each fixture header states
+/// its label.
 /// The CAPTURED fixtures that this module copies from are the three SMA-840
-/// captures: `thinking_text_tool_use.txt`, `empty_thinking_tool_use.txt` and
-/// `redacted_thinking_tool_use.txt`. All the others are HAND-AUTHORED. The
+/// captures (`thinking_text_tool_use.txt`, `empty_thinking_tool_use.txt` and
+/// `redacted_thinking_tool_use.txt`) and the SMA-860 capture
+/// `fixtures/anthropic/zero_arg_tool_call.raw` in this test crate. All the
+/// others are HAND-AUTHORED. The
 /// `input_json_delta` values ([`CAPTURED_ARGS`]) come from all three
 /// captures. The thinking helpers come from `thinking_text_tool_use.txt`. The
 /// `message_start`, `message_delta` and `tool_use_start` helpers copy
@@ -1939,6 +2250,10 @@ mod litellm {
 ///   `redacted_thinking_tool_use.txt` lines 95-105). Grounds
 ///   [`CAPTURED_ARGS`] together with `thinking_text_tool_use.txt`. No other
 ///   shape in this module comes from these two files.
+/// - `tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw`
+///   — CAPTURED (`claude-haiku-5-5`, 2026-11-24). `ZeroArgToolCallCleanStop`
+///   sends the whole file byte for byte ([`ZERO_ARG_EVENTS`] lists its seven
+///   events). The request sits next to it.
 ///
 /// `body_cut_inside_message_stop.txt` (HAND-AUTHORED, SMA-531, PR #200) and
 /// `thinking_then_text.txt` (HAND-AUTHORED, SMA-317, PR #33) were read
@@ -2023,7 +2338,9 @@ mod litellm {
 /// The three tool scripts (`ToolCallCleanStop`, `ThinkingToolCallCleanStop`
 /// and `ReasoningCleanStop`) send the captured shape: the four
 /// [`CAPTURED_ARGS`] values, in order, one `input_json_delta` each. Like `bedrock`/`openai_chat`/`litellm`, this
-/// module therefore sends more than one argument delta for one call.
+/// module therefore sends more than one argument delta for one call. The
+/// fourth tool script, `ZeroArgToolCallCleanStop`, is the exception. It sends
+/// the capture byte for byte: one `input_json_delta` with `partial_json: ""`.
 ///
 /// The translator gives the name to the first `input_json_delta` of a call,
 /// also when its `partial_json` is empty (`stream.rs`'s `InputJsonDelta`
@@ -2445,6 +2762,52 @@ mod anthropic {
         )
     }
 
+    /// The seven events of `fixtures/anthropic/zero_arg_tool_call.raw`, as
+    /// `(event name, data payload)` pairs, byte for byte, in file order. Each
+    /// payload keeps the spaces before its closing `}`. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_EVENTS: [(&str, &str); 7] = [
+        (
+            "message_start",
+            r##"{"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_011ChNQ3Tog5cJ6yjFuLDgND","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":485,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":11,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}      }"##,
+        ),
+        (
+            "content_block_start",
+            r##"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01RJqBrxUZ8pUUbgZAKYM8T5","name":"get_current_time","input":{},"caller":{"type":"direct"}}     }"##,
+        ),
+        ("ping", r##"{"type": "ping"}"##),
+        (
+            "content_block_delta",
+            r##"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}    }"##,
+        ),
+        (
+            "content_block_stop",
+            r##"{"type":"content_block_stop","index":0}"##,
+        ),
+        (
+            "message_delta",
+            r##"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":485,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":11,"output_tokens_details":{"thinking_tokens":0}}               }"##,
+        ),
+        ("message_stop", r##"{"type":"message_stop"  }"##),
+    ];
+
+    /// The one call of [`ZERO_ARG_EVENTS`]: the tool name and empty arguments.
+    /// The wire sends one `partial_json` of `""`, which the floors read as
+    /// `{}`.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/anthropic/zero_arg_tool_call.raw");
+
+    /// One captured SSE frame: `event: {event}\ndata: {payload}\n\n`. The
+    /// `event:` line is kept, as in the file.
+    fn captured_frame(event: &str, payload: &str) -> Vec<u8> {
+        format!("event: {event}\ndata: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario, or `None` for
     /// `FragmentedToolName`, which this subject declines, or for a scenario
     /// that it has no capture for (uncaptured).
@@ -2644,8 +3007,29 @@ mod anthropic {
             }
             // Not served — see the reason in `Anthropic::stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/anthropic/zero_arg_tool_call.raw`, CAPTURED from the
+            // Anthropic Messages API (`https://api.anthropic.com/v1/messages`,
+            // `anthropic-version: 2023-06-01`, `claude-haiku-5-5`) on
+            // 2026-11-24 at 20:38:59 UTC, with one zero-argument tool and a
+            // forced `tool_choice`. The wire sent one `input_json_delta` with
+            // `partial_json: ""`. The `content_block_start` carries
+            // `"input":{}`, which the translator ignores. The floors read the
+            // blank arguments as `{}`. Seven events: `message_start`,
+            // `content_block_start`, `ping`, `content_block_delta`,
+            // `content_block_stop`, `message_delta` and `message_stop`.
+            //
+            // Edits made here: none to any payload. This script sends the
+            // seven `event:` and `data:` payloads byte for byte
+            // ([`ZERO_ARG_EVENTS`]). Each pair becomes one frame that ends
+            // with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_EVENTS
+                    .iter()
+                    .map(|(event, payload)| captured_frame(event, payload))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -2698,6 +3082,17 @@ mod anthropic {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         req
     }
@@ -2757,7 +3152,8 @@ mod anthropic {
                 // Run C's `message_delta` carries `"tool_use"` too.
                 Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop => Some(FinishReason::ToolCalls),
+                | Scenario::ReasoningCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -2766,9 +3162,7 @@ mod anthropic {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
                 // Declined or uncaptured; never reached.
-                Scenario::FragmentedToolName
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                Scenario::FragmentedToolName | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -2804,6 +3198,8 @@ mod anthropic {
                 // Run C's one call (`thinking_text_tool_use.txt`, lines
                 // 106-118).
                 Scenario::ReasoningCleanStop => RUN_C_CALLS,
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
                 Scenario::CleanStop
                 | Scenario::TruncatedAfterStopReason
                 | Scenario::TruncatedMidGeneration
@@ -2814,8 +3210,7 @@ mod anthropic {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => &[],
+                | Scenario::ParallelToolCallCleanStop => &[],
             }
         }
 
@@ -2831,11 +3226,6 @@ mod anthropic {
             // `parallel_tool_use.txt` has no capture behind it (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture of
-            // one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -2898,6 +3288,10 @@ mod anthropic {
             ("message_stop", message_stop()),
             ("tool_use start", tool_use_start(TOOL_USE_ID, TOOL_NAME)),
             ("input_json_delta", input_json_delta(CAPTURED_ARGS[1])),
+            (
+                "zero-arg input_json_delta",
+                captured_frame(ZERO_ARG_EVENTS[3].0, ZERO_ARG_EVENTS[3].1),
+            ),
             ("thinking start", thinking_start()),
             ("thinking delta", thinking_delta("I need the weather.")),
             ("signature delta", signature_delta("SIG_FAKE_1")),
@@ -2919,6 +3313,27 @@ mod anthropic {
                  a literal \"stop_reason\":null, and the marker must not match that null value."
             );
         }
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED from the Anthropic Messages API at
+    /// `https://api.anthropic.com/v1/messages` with the header
+    /// `anthropic-version: 2023-06-01`. The model is `claude-haiku-5-5`. The
+    /// capture ran on 2026-11-24 at 20:38:59 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.request.json`.
+    /// The file is `fixtures/anthropic/zero_arg_tool_call.raw`. It is 1364 bytes. Its
+    /// SHA-256 is
+    /// `b6114d956d7d80a6b315fcd2f6866fff8c776e9ebbed846c8ab7ccf9093dd86e`.
+    /// Finding: the wire sends one `input_json_delta` with `partial_json: ""`.
+    /// The `content_block_start` carries `"input":{}`.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 7);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]
@@ -2967,6 +3382,10 @@ mod anthropic {
 ///   (`docs/superpowers/specs/2026-11-20-sma-827-gemini-thought-signatures-design.md:299`).
 ///   `ParallelToolCallCleanStop` sends all four of its payloads byte for byte
 ///   ([`PARALLEL_SIGNED`]); the script arm lists the edits.
+/// - `tests/provider-stream-conformance/fixtures/gemini/zero_arg_tool_call.raw`
+///   — CAPTURED (gemini-3.8-flash, 2026-11-24). `ZeroArgToolCallCleanStop`
+///   sends both of its payloads byte for byte ([`ZERO_ARG_CHUNKS`]), with CRLF
+///   frame endings.
 ///
 /// # Live capture — `ToolCallCleanStop`
 ///
@@ -3049,7 +3468,7 @@ mod anthropic {
 /// capture above contradicts that shape directly: its first chunk carries
 /// `usageMetadata` despite having no `finishReason` at all.
 /// `parallel_signed.sse` shows the same: each of its four chunks carries
-/// `usageMetadata`. In both recorded captures, usage is on every chunk, not
+/// `usageMetadata`. So do both chunks of `zero_arg_tool_call.raw`. In all three recorded captures, usage is on every chunk, not
 /// only the terminal one. `multi_chunk_usage_emits_usage_per_chunk`'s first
 /// chunk (already cited above) has the same shape, but it is HAND-AUTHORED
 /// and is not evidence of wire behaviour. [`text_delta`] now sets
@@ -3166,8 +3585,35 @@ mod gemini {
         format!("data: {payload}\n\n").into_bytes()
     }
 
-    /// One SSE frame: `data: {payload}\n\n`. Both recorded Gemini captures
-    /// (the module doc's "Live capture" and `parallel_signed.sse`) have bare
+    /// One SSE frame around a payload of `zero_arg_tool_call.raw`, sent byte
+    /// for byte: `data: {payload}\r\n\r\n`. That capture has CRLF line
+    /// endings on the wire.
+    fn captured_frame_crlf(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\r\n\r\n").into_bytes()
+    }
+
+    /// The two `data:` payloads of `fixtures/gemini/zero_arg_tool_call.raw`,
+    /// byte for byte, in file order. The first keeps its real
+    /// `thoughtSignature`. See the `ZeroArgToolCallCleanStop` arm of [`script`]
+    /// for the provenance.
+    const ZERO_ARG_CHUNKS: [&str; 2] = [
+        r##"{"candidates": [{"content": {"parts": [{"functionCall": {"name": "get_current_time","args": {},"id": "call_15312425021673810944"},"thoughtSignature": "EvsCCvgCAWkUfRN4KWAsTtHg7IyaigsGASIrvbzyixovA+E9Y8pnO095GcTFcaNlKEXY5BqWZ0c1jBr+pb8s9TD0MQPcyPGSfn9SmnEVVO4e7Vul2wJRYPsEvBDxs6YjgcUAeeolbaBfk2He9U3aworlN6hxNnxCq+1ZcTJMIF0EbMd9W1sDIc95A9GAKAr0Av0BNwAX8RS9xvsv2sXv8mwSx2Rns2Oj7tNfnwp0C7Jk6OT8Y6x7yeZA9F0aL6FK4mJG2tN4Ft8jAHAJkj1/TOiTcvIdfc7sJc4H864lYnW88k+jrTwYkKzM3L9aJ7bfyhdc9taOyUTNMK+AL14GxlPvDTMWgi2Ez6IVURMUmgzS7sMcgwd8HJnDeFQT+7yFwjDRt+yFkJryNa3PalvCvvIPBCJWEqF4TjuSuQoK4LSio634kCp41xZZjkkZN0NJ1BPCeko8yjeW390rJyfJBs1ceiFIMAD/ek+ralcNR3wg47AZEhM01lkq+cwuLw=="}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 39,"candidatesTokenCount": 12,"totalTokenCount": 99,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 39}],"thoughtsTokenCount": 48,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "P_4Fa_fCD-qG28oPjou6gAQ"}"##,
+        r##"{"candidates": [{"content": {"parts": [{"text": ""}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 39,"candidatesTokenCount": 12,"totalTokenCount": 99,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 39}],"thoughtsTokenCount": 48,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "P_4Fa_fCD-qG28oPjou6gAQ"}"##,
+    ];
+
+    /// The one call of [`ZERO_ARG_CHUNKS`]: the tool name and empty arguments.
+    /// The wire sends `"args": {}`, not a missing `args`.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/gemini/zero_arg_tool_call.raw");
+
+    /// One SSE frame: `data: {payload}\n\n`. All three recorded Gemini captures
+    /// (the module doc's "Live capture", `parallel_signed.sse` and
+    /// `zero_arg_tool_call.raw`) have bare
     /// `data:` frames with no `event:` line, and so does every inline body
     /// cited above.
     fn frame(payload: serde_json::Value) -> Vec<u8> {
@@ -3248,7 +3694,7 @@ mod gemini {
 
     /// `id`, the whole function `name`, the whole argument JSON, and
     /// `thoughtSignature`, all in one `functionCall` part, plus
-    /// `usageMetadata`. In both recorded captures each `functionCall` part
+    /// `usageMetadata`. In all three recorded captures each `functionCall` part
     /// arrives whole in one chunk, and the translator reads it from one part
     /// (see the module doc's "why `FragmentedToolName` is declined" section).
     ///
@@ -3440,8 +3886,26 @@ mod gemini {
                 None,
                 Ending::Clean,
             ),
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/gemini/zero_arg_tool_call.raw`, CAPTURED from the
+            // Gemini Developer API (`streamGenerateContent?alt=sse`,
+            // `gemini-3.8-flash`) on 2026-11-24 at 21:14:44 UTC, with one
+            // zero-argument tool and a forced `tool_choice`. Chunk 0 holds one
+            // `functionCall` part with `"args": {}` and a real
+            // `thoughtSignature`. Chunk 1 holds an empty text part with
+            // `"finishReason": "STOP"`. The body ended at bare EOF, so no
+            // `[DONE]` is sent. The wire uses CRLF line endings.
+            //
+            // Edits made here: none to any payload. This script sends the two
+            // `data:` payloads byte for byte ([`ZERO_ARG_CHUNKS`]). Each one
+            // becomes one frame that ends with a CRLF blank line.
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_CHUNKS
+                    .iter()
+                    .map(|p| captured_frame_crlf(p))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -3479,6 +3943,17 @@ mod gemini {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         if scenario == Scenario::ParallelToolCallCleanStop {
             req.tools = vec![
@@ -3553,16 +4028,18 @@ mod gemini {
                 }
                 // `"STOP"` maps to `FinishReason::ToolCalls` once
                 // `saw_function_call` is set, which `tool_call_chunk` sets.
-                // In both recorded captures the finish chunk after a tool
+                // In all three recorded captures the finish chunk after a tool
                 // call carries `"STOP"`, not a tool-specific value. The
                 // translator derives `ToolCalls` purely from having seen a
                 // `functionCall` part earlier in the stream, not from a
                 // distinct `finishReason` string.
                 // Capture 1's stop chunk carries the same `"STOP"` after three
                 // `functionCall` parts.
-                Scenario::ToolCallCleanStop | Scenario::ParallelToolCallCleanStop => {
-                    Some(FinishReason::ToolCalls)
-                }
+                // The zero-argument capture's stop chunk carries `"STOP"` after one
+                // `functionCall` part.
+                Scenario::ToolCallCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -3573,8 +4050,7 @@ mod gemini {
                 // Declined or uncaptured; never reached.
                 Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ReasoningCleanStop => None,
             }
         }
 
@@ -3591,6 +4067,8 @@ mod gemini {
                 // Capture 1's three calls, in wire order, with their captured
                 // arguments ([`PARALLEL_SIGNED`]).
                 Scenario::ParallelToolCallCleanStop => PARALLEL_CALLS,
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
                 Scenario::CleanStop
                 | Scenario::TruncatedAfterStopReason
                 | Scenario::TruncatedMidGeneration
@@ -3601,8 +4079,7 @@ mod gemini {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => &[],
+                | Scenario::ReasoningCleanStop => &[],
             }
         }
 
@@ -3615,11 +4092,6 @@ mod gemini {
             }
             if scenario == Scenario::ThinkingToolCallCleanStop {
                 return Outcome::Declined("the scenario serves an anthropic thinking block");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture
-            // of one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
             // `request` never sets a thinking configuration, so no thought
             // parts arrive on the wire.
@@ -3689,6 +4161,10 @@ mod gemini {
                 "Capture 1 unsigned functionCall chunk (Rome)",
                 captured_frame(PARALLEL_SIGNED[2]),
             ),
+            (
+                "zero-arg functionCall chunk",
+                captured_frame_crlf(ZERO_ARG_CHUNKS[0]),
+            ),
         ] {
             assert!(
                 !has_finish_reason(&frame),
@@ -3703,6 +4179,28 @@ mod gemini {
     #[test]
     fn gemini_parallel_script_encodes_its_stop_reason() {
         assert!(Gemini.encodes_stop_reason(Scenario::ParallelToolCallCleanStop));
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED from the Gemini Developer API at
+    /// `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse`.
+    /// The model is `gemini-3.8-flash`. The capture ran on 2026-11-24 at
+    /// 21:14:44 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/gemini/zero_arg_tool_call.request.json`.
+    /// The file is `fixtures/gemini/zero_arg_tool_call.raw`. It
+    /// is 1383 bytes. Its SHA-256 is
+    /// `45271e2e2c96d08f183bec5251811498fee18b74c3cbfc92f9a2fc7c35542624`.
+    /// Findings: the wire uses CRLF line endings. The call has `"args": {}`,
+    /// not a missing `args`. An earlier capture without `parameters`
+    /// (20:39:23 UTC) is not committed.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 2);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]

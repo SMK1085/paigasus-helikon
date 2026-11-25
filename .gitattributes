@@ -17,12 +17,17 @@ crates/paigasus-helikon-providers-openai/tests/fixtures/*.txt text eol=lf
 # Cross-provider stream-conformance fixtures (SMA-533). The SSE subjects' `.txt`
 # fixtures follow the LF convention above.
 #
-# Presently inert: none of the six subjects checks in a fixture file — all
-# six build their wire bytes in code (see `tests/conformance.rs`). This rule
-# is here so that a `.txt` fixture dropped into this directory later cannot
-# be silently corrupted on a Windows checkout, the same defensive reasoning
-# as the binary rule below.
+# No `.txt` file is checked in there today. The captures are `.raw` files,
+# which the `*.raw binary` rule below covers. This rule keeps a later `.txt`
+# fixture from being corrupted on a Windows checkout.
 tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
+
+# Raw stream-conformance captures (SMA-860): each `.raw` file is a response
+# body exactly as the wire sent it, with no header, so that its SHA-256
+# matches the record in its guard test. The Gemini capture uses CRLF line
+# endings, and any eol translation would change those bytes. Listed before
+# the bedrock `binary` rule, which must stay last.
+tests/provider-stream-conformance/fixtures/**/*.raw binary
 
 # Gemini SSE fixtures (SMA-827): split on literal newlines by tests, so pin LF.
 crates/paigasus-helikon-providers-gemini/tests/fixtures/*.sse text eol=lf
@@ -42,9 +47,8 @@ crates/paigasus-helikon-providers-gemini/tests/fixtures/*.sse text eol=lf
 # resolves later matches first, so no broader glob above can turn a file under
 # this directory back into `text`.
 #
-# Presently inert: the Bedrock subject builds its frames in-process with
-# `eventstream::frame` rather than checking in opaque `.bin` blobs, so no file
-# matches this yet. It is here so that a later fixture dropped into that
-# directory cannot be silently corrupted on a Windows checkout — which would
-# present as the translator dropping unknown events, not as a checkout bug.
+# The Bedrock capture is a `.raw` file, which the `*.raw binary` rule above
+# already covers. This rule also covers any other file in that directory, so
+# that no later fixture there is corrupted on a Windows checkout. Such
+# corruption would look like the translator dropping unknown events.
 tests/provider-stream-conformance/fixtures/bedrock/** binary
