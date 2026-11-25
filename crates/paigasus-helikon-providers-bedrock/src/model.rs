@@ -154,8 +154,8 @@ impl Model for BedrockModel {
                     // subsequent Metadata event so the consumer always sees
                     // a terminal Finish.
                     Ok(None) => {
-                        if let Some(terminal) = translator.finish() {
-                            yield terminal;
+                        for ev in translator.finish() {
+                            yield ev;
                         }
                         return;
                     }

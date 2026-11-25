@@ -91,6 +91,9 @@ pub struct StreamTranslator {
     pending_stop_reason: Option<StopReason>,
     /// `true` once a `Metadata` event has been processed.
     metadata_seen: bool,
+    /// `true` once a terminal event (`Finish` or an `Err`) was produced.
+    // Read by the ContentBlockStop arm (SMA-863 Task 5).
+    terminal_emitted: bool,
 }
 
 impl StreamTranslator {
@@ -153,6 +156,7 @@ impl StreamTranslator {
                             // silent: the error is emitted once per stream.
                             if !self.refused_tool_call {
                                 self.refused_tool_call = true;
+                                self.terminal_emitted = true;
                                 out.push(Err(ModelError::Other(anyhow::anyhow!(
                                     "the model called a tool, but tool_choice is None"
                                 ))));
@@ -293,16 +297,17 @@ impl StreamTranslator {
     /// (EOF) without having emitted a `Metadata` event.
     ///
     /// Returns the terminal `Finish` event (or a `ModelError::Other` for the
-    /// both-tools-fired error condition) if a stop reason is still pending,
-    /// or `None` if the stream already emitted its terminal event through the
-    /// normal `Metadata`→`Finish` path.
+    /// both-tools-fired error condition) if a stop reason is still pending.
+    /// Returns an empty `Vec` if the stream already emitted its terminal event
+    /// through the normal `Metadata`→`Finish` path.
     ///
     /// **Call this only on the EOF path, not on the cancellation path.**
     /// Cancellation must end the stream without emitting `Finish`.
-    pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
-        self.pending_stop_reason
-            .take()
-            .and_then(|reason| self.finish_events(reason).into_iter().next())
+    pub(crate) fn finish(&mut self) -> Vec<Result<ModelEvent, ModelError>> {
+        match self.pending_stop_reason.take() {
+            Some(reason) => self.finish_events(reason),
+            None => Vec::new(),
+        }
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
@@ -312,7 +317,7 @@ impl StreamTranslator {
     /// Returns a single `Ok(Finish{..})` in normal cases, or a single
     /// `Err(ModelError::Other)` when both a real and the synthesized tool
     /// fired in synthesis mode.
-    fn finish_events(&self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
+    fn finish_events(&mut self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
         // A refused tool call already ended the stream with an error. As on the
         // both-tools-fired path, the error replaces the terminal `Finish`.
         if self.refused_tool_call {
@@ -355,6 +360,7 @@ impl StreamTranslator {
                 reason: FinishReason::Other(other.as_str().to_owned()),
             }),
         };
+        self.terminal_emitted = true;
         vec![finish]
     }
 }
@@ -883,7 +889,7 @@ mod tests {
         ] {
             out.extend(t.consume(ev));
         }
-        assert!(t.finish().is_none(), "finish() must add nothing");
+        assert!(t.finish().is_empty(), "finish() must add nothing");
         assert_eq!(out.len(), 2, "got {out:?}");
         assert!(out[0].is_err(), "expected Err first, got {:?}", out[0]);
         assert!(
@@ -904,7 +910,7 @@ mod tests {
             out.extend(t.consume(ev));
         }
         assert_eq!(out.len(), 1, "got {out:?}");
-        assert!(t.finish().is_none());
+        assert!(t.finish().is_empty());
     }
 
     #[test]
@@ -994,9 +1000,9 @@ mod tests {
         );
 
         // EOF path: call finish() and expect the terminal Finish(Stop).
-        let terminal = t
-            .finish()
-            .expect("finish() must return Some when stop reason is buffered");
+        let mut fin = t.finish();
+        assert_eq!(fin.len(), 1, "got {fin:?}");
+        let terminal = fin.remove(0);
         assert!(
             matches!(terminal, Ok(ModelEvent::Finish { ref reason }) if *reason == FinishReason::Stop),
             "expected Finish(Stop), got {terminal:?}"
@@ -1004,8 +1010,8 @@ mod tests {
 
         // A second call must return None (idempotent drain).
         assert!(
-            t.finish().is_none(),
-            "finish() must return None after the pending reason was drained"
+            t.finish().is_empty(),
+            "finish() must return empty after the pending reason was drained"
         );
     }
 
@@ -1022,8 +1028,8 @@ mod tests {
 
         // finish() must now return None — nothing is pending.
         assert!(
-            t.finish().is_none(),
-            "finish() must return None when Metadata already drained the pending reason"
+            t.finish().is_empty(),
+            "finish() must return empty when Metadata already drained the pending reason"
         );
     }
 
@@ -1039,11 +1045,47 @@ mod tests {
         let out = t.consume(message_stop(StopReason::ToolUse));
         assert!(out.is_empty(), "MessageStop alone must buffer");
 
-        let terminal = t.finish().expect("finish() must return Some");
+        let mut fin = t.finish();
+        assert_eq!(fin.len(), 1, "got {fin:?}");
+        let terminal = fin.remove(0);
         assert!(
             matches!(terminal, Err(ModelError::Other(_))),
             "expected Err(Other) for both-tools-fired; got {terminal:?}"
         );
+    }
+
+    /// A text turn through `MessageStop` and `Metadata` sets `terminal_emitted`.
+    #[test]
+    fn terminal_emitted_is_set_by_finish() {
+        let mut t = StreamTranslator::new(false);
+        t.consume(message_stop(StopReason::EndTurn));
+        t.consume(metadata(1, 1, None));
+        assert!(t.terminal_emitted);
+    }
+
+    /// A refused tool call pushes its `Err` and sets `terminal_emitted`.
+    #[test]
+    fn terminal_emitted_is_set_by_refused_tool_call() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        t.consume(tool_use_start(0, "tu", "t"));
+        assert!(t.terminal_emitted);
+    }
+
+    /// The both-tools `Err` is a terminal event and sets `terminal_emitted`.
+    #[test]
+    fn terminal_emitted_is_set_by_both_tools_error() {
+        let mut t = StreamTranslator::new(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME),
+            tool_use_start(1, "tu_real", "search"),
+            message_stop(StopReason::ToolUse),
+            metadata(1, 1, None),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert!(matches!(out.last(), Some(Err(_))), "got {out:?}");
+        assert!(t.terminal_emitted);
     }
 
     /// Collect the tool-call names and the final event of a run.
