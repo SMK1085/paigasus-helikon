@@ -39,7 +39,7 @@ pub enum BuildError {
     MissingClient,
 
     /// The model identifier was empty.  Pass a non-empty Bedrock model id such
-    /// as `"anthropic.claude-3-5-sonnet-20241022-v2:0"`.
+    /// as `"global.anthropic.claude-sonnet-5-5"`.
     #[error("model id is empty")]
     EmptyModelId,
 }
@@ -54,7 +54,7 @@ pub enum BuildError {
 pub(crate) struct Config {
     /// Initialized Bedrock SDK client (region already baked in).
     pub(crate) client: Client,
-    /// Bedrock model identifier (e.g. `anthropic.claude-3-5-sonnet-20241022-v2:0`).
+    /// Bedrock model identifier (e.g. `global.anthropic.claude-sonnet-5-5`).
     pub(crate) model_id: String,
     /// Effective model family: the builder override, else the family detected from the model id.
     pub(crate) family: ModelFamily,
@@ -385,7 +385,7 @@ impl crate::BedrockModel {
     /// ```ignore
     /// use paigasus_helikon_providers_bedrock::BedrockModel;
     /// # async fn f() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+    /// let model = BedrockModel::converse("global.anthropic.claude-sonnet-5-5")
     ///     .sdk_config(&aws_config::defaults(aws_config::BehaviorVersion::v2026_11_17())
     ///         .load().await)
     ///     .build()?;
@@ -463,8 +463,7 @@ mod tests {
 
     #[test]
     fn no_client_or_config_returns_err_missing_client() {
-        let result =
-            crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0").build();
+        let result = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6").build();
         assert!(
             matches!(result, Err(BuildError::MissingClient)),
             "expected MissingClient, got {result:?}",
@@ -473,11 +472,11 @@ mod tests {
 
     #[test]
     fn injecting_client_succeeds() {
-        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        let model = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6")
             .client(offline_client())
             .build()
             .expect("should build with injected client");
-        assert_eq!(model.model(), "anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert_eq!(model.model(), "anthropic.claude-sonnet-4-6");
     }
 
     #[test]
@@ -502,7 +501,7 @@ mod tests {
 
     #[test]
     fn capabilities_come_from_caps_for_by_default() {
-        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        let model = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6")
             .client(offline_client())
             .build()
             .expect("build");
@@ -518,7 +517,7 @@ mod tests {
     #[test]
     fn capabilities_override_wins_over_lookup() {
         let custom = ModelCapabilities::empty();
-        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        let model = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6")
             .client(offline_client())
             .capabilities(custom)
             .build()
@@ -533,7 +532,7 @@ mod tests {
 
     #[test]
     fn max_output_override_is_stored() {
-        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        let model = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6")
             .client(offline_client())
             .max_output_tokens_default(1234)
             .build()
@@ -543,7 +542,7 @@ mod tests {
 
     #[test]
     fn max_output_default_is_none_when_not_set() {
-        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        let model = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6")
             .client(offline_client())
             .build()
             .expect("build");
@@ -554,12 +553,12 @@ mod tests {
     fn region_ignored_when_client_injected() {
         // Should succeed without warning-as-error: the tracing::debug! inside
         // build() does NOT panic. We just verify build succeeds.
-        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        let model = crate::BedrockModel::converse("anthropic.claude-sonnet-4-6")
             .client(offline_client())
             .region(Region::new("ap-southeast-1"))
             .build()
             .expect("build should succeed even when region is set with injected client");
-        assert_eq!(model.model(), "anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert_eq!(model.model(), "anthropic.claude-sonnet-4-6");
     }
 
     /// Passing `.sdk_config()` + `.region()` should succeed and cover the
@@ -712,10 +711,7 @@ mod tests {
 
     #[test]
     fn unknown_override_turns_off_synthesis_on_anthropic_id() {
-        let model = build_with(
-            "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            Some(ModelFamily::Unknown),
-        );
+        let model = build_with("anthropic.claude-sonnet-4-6", Some(ModelFamily::Unknown));
         assert_one_family(&model, ModelFamily::Unknown);
         let w = wire(&model, &json_schema_request());
         assert!(w["toolConfig"].is_null());
@@ -751,7 +747,7 @@ mod tests {
         assert!(w.get("outputConfig").is_some());
     }
 
-    const CLAUDE: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+    const CLAUDE: &str = "anthropic.claude-sonnet-4-6";
 
     #[test]
     fn native_tool_types_defaults_to_true() {

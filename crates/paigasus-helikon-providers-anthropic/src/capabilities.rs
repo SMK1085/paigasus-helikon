@@ -28,7 +28,7 @@ pub(crate) const fn conservative_defaults() -> ModelEntry {
 /// implementation time. Entries that diverge are bugs — file follow-up
 /// chore-PRs to keep this table aligned with reality.
 pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
-    // Claude 4 family — primary lineup as of 2026-05.
+    // Claude 4 and 5 families.
     (
         "claude-opus-4-7",
         ModelEntry {
@@ -114,6 +114,20 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
         },
     ),
     (
+        "claude-haiku-5-5",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
         "claude-haiku-4-5",
         ModelEntry {
             caps: ModelCapabilities::empty()
@@ -124,104 +138,6 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
                 .with_vision()
                 .with_prompt_caching(),
             max_output_default: 8192,
-        },
-    ),
-    // Claude 3.5 family
-    (
-        "claude-3-5-sonnet-latest",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_parallel_tool_calls()
-                .with_structured_output()
-                .with_vision()
-                .with_prompt_caching(),
-            max_output_default: 8192,
-        },
-    ),
-    (
-        "claude-3-5-sonnet-20241022",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_parallel_tool_calls()
-                .with_structured_output()
-                .with_vision()
-                .with_prompt_caching(),
-            max_output_default: 8192,
-        },
-    ),
-    (
-        "claude-3-5-haiku-latest",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_parallel_tool_calls()
-                .with_structured_output()
-                .with_prompt_caching(),
-            max_output_default: 8192,
-        },
-    ),
-    (
-        "claude-3-5-haiku-20241022",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_parallel_tool_calls()
-                .with_structured_output()
-                .with_prompt_caching(),
-            max_output_default: 8192,
-        },
-    ),
-    // Claude 3 family — older; URL-form image inputs may 400 (use base64).
-    (
-        "claude-3-opus-latest",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_structured_output()
-                .with_vision()
-                .with_prompt_caching(),
-            max_output_default: 4096,
-        },
-    ),
-    (
-        "claude-3-opus-20240229",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_structured_output()
-                .with_vision()
-                .with_prompt_caching(),
-            max_output_default: 4096,
-        },
-    ),
-    (
-        "claude-3-sonnet-20240229",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_structured_output()
-                .with_vision(),
-            max_output_default: 4096,
-        },
-    ),
-    (
-        "claude-3-haiku-20240307",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_structured_output()
-                .with_vision(),
-            max_output_default: 4096,
         },
     ),
 ];
@@ -259,17 +175,16 @@ mod tests {
     }
 
     #[test]
-    fn haiku_3_5_has_no_vision() {
-        let e = lookup("claude-3-5-haiku-20241022");
-        assert!(!e.caps.vision, "3.5 Haiku has no vision");
-        assert!(e.caps.prompt_caching);
-    }
-
-    #[test]
-    fn old_3_sonnet_lacks_prompt_caching() {
-        let e = lookup("claude-3-sonnet-20240229");
-        assert!(!e.caps.prompt_caching);
+    fn haiku_5_5_row_matches_the_observed_capabilities() {
+        let e = lookup("claude-haiku-5-5");
+        assert!(e.caps.streaming);
+        assert!(e.caps.tools);
+        assert!(e.caps.parallel_tool_calls);
+        assert!(e.caps.structured_output);
         assert!(e.caps.vision);
+        assert!(e.caps.reasoning);
+        assert!(e.caps.prompt_caching);
+        assert_eq!(e.max_output_default, 32_768);
     }
 
     #[test]

@@ -54,7 +54,7 @@ impl ModelFamily {
     /// ```
     /// use paigasus_helikon_providers_bedrock::ModelFamily;
     /// assert_eq!(
-    ///     ModelFamily::from_model_id("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+    ///     ModelFamily::from_model_id("anthropic.claude-haiku-5-5"),
     ///     ModelFamily::Anthropic,
     /// );
     /// assert_eq!(
@@ -161,9 +161,9 @@ mod tests {
     #[test]
     fn detects_families_from_bedrock_model_ids() {
         for (id, want) in [
-            ("anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic),
-            ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", Anthropic), // cross-region inference profile prefix
-            ("apac.anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic), // apac prefix
+            ("anthropic.claude-haiku-5-5", Anthropic),
+            ("us.anthropic.claude-sonnet-4-6", Anthropic), // cross-region inference profile prefix
+            ("apac.anthropic.claude-haiku-5-5", Anthropic), // apac prefix
             ("amazon.nova-pro-v1:0", AmazonNova),
             ("amazon.titan-text-express-v1", AmazonTitan),
             ("meta.llama3-1-70b-instruct-v1:0", Llama),
@@ -218,7 +218,7 @@ mod tests {
             ("global.anthropic.claude-sonnet-4-5-20250929-v1:0", Anthropic),
             ("global.anthropic.claude-sonnet-5-5", Anthropic),
             ("ap.anthropic.claude-x", Anthropic),
-            ("us-gov.anthropic.claude-3-5-sonnet-20240620-v1:0", Anthropic),
+            ("us-gov.anthropic.claude-haiku-5-5", Anthropic),
             ("global.amazon.nova-2-lite-v1:0", AmazonNova),
             ("us.meta.llama3-2-90b-instruct-v1:0", Llama),
             ("eu.mistral.pixtral-large-2502-v1:0", Mistral),
@@ -234,9 +234,9 @@ mod tests {
             ("..anthropic.x", Unknown),
             ("global.", Unknown),
             ("global.anthropic", Anthropic),
-            ("arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic),
+            ("arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-5-5", Anthropic),
             ("ARN:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x", Anthropic),
-            ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic),
+            ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6", Anthropic),
             ("arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/anthropic.claude:1", Anthropic),
             ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6", Unknown),
             ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/", Unknown),

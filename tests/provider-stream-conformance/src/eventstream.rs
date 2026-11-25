@@ -167,12 +167,10 @@ fn build_bedrock_model_against(base_url: &str) -> paigasus_helikon_providers_bed
         )))
         .build();
 
-    paigasus_helikon_providers_bedrock::BedrockModel::converse(
-        "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    )
-    .sdk_config(&sdk_config)
-    .build()
-    .expect("bedrock model should build from a static SdkConfig")
+    paigasus_helikon_providers_bedrock::BedrockModel::converse("anthropic.claude-sonnet-4-6")
+        .sdk_config(&sdk_config)
+        .build()
+        .expect("bedrock model should build from a static SdkConfig")
 }
 
 #[cfg(test)]

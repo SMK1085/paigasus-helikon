@@ -124,7 +124,7 @@ mod tests {
     use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
     use crate::translate::{build_request, to_wire_json};
 
-    const CLAUDE: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+    const CLAUDE: &str = "anthropic.claude-sonnet-4-6";
     const MISTRAL: &str = "mistral.mistral-large-2407-v1:0";
 
     fn rejected() -> SendFailure {

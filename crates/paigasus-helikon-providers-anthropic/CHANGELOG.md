@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Claude 3.x models are not supported. A `claude-3-*` id now reports the conservative capability set (streaming and tools). For a `claude-3-5-*` id, the default `max_tokens` drops from 8192 to 4096. Claude 3 ids already had 4096. If you still call such a model, set `max_output_tokens` per request and `.with_capabilities()` on the builder, or stay on 0.3.5.
+- `claude-haiku-5-5` now reports streaming, tools, parallel tool calls, structured output, vision, reasoning and prompt caching, with a default `max_tokens` of 32768.
+
 ## [0.3.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.4...paigasus-helikon-providers-anthropic-v0.3.5) - 2026-11-22
 
 ### Fixed
