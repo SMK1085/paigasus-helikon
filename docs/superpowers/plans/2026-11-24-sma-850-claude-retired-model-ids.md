@@ -203,7 +203,7 @@ git commit -m "test(providers): SMA-850 use current claude ids in the stream con
 - [ ] **Step 1: No retired id remains**
 
 Run: `git grep -nE 'claude-3|claude-instant|claude-v2' -- ':!docs/superpowers' ':!**/CHANGELOG.md'` and `git grep -nE -i 'claude 3|3\.5 (sonnet|haiku)|(sonnet|haiku|opus) 3' -- ':!docs/superpowers' ':!**/CHANGELOG.md'`
-Expected: both print nothing.
+Expected: the first prints nothing. The second prints only the four required sentences that contain `Claude 3.x models are not supported` (the Anthropic README, the Bedrock README, and the book's Anthropic and Bedrock sections). Any other match is a leftover.
 
 - [ ] **Step 2: Full CI gate set** from the Helikon `CLAUDE.md` "Common commands" block (fmt, clippy with `--all-features --all-targets -D warnings`, `cargo test --workspace --all-features`, docs with `RUSTDOCFLAGS="-D warnings"`, doc coverage, markdownlint and its config check, the `scripts/check-*` scripts), plus `mdbook build docs/book`.
 Expected: every command exits 0.
