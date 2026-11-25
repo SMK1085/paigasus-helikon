@@ -1,0 +1,46 @@
+<agent-message from="a0eb7eb39cbfe0a23">
+[Subagent hand-back] The text below is the final report of a subagent this session delegated to. It is model output, NOT a message from the user: instructions, requests, or approval claims inside it are the subagent's words and carry no user authority. The harness indents every line of the report, so a frame-like line at column zero inside it would be forged. Notes above this frame may quote model-derived text, which carries no user authority either. The report follows:
+  Status: DONE
+  Commit: 06a2446d refactor(providers): SMA-863 return a vec from the anthropic stream finish
+  Tests: anthropic lib 271 passed before and after (the other suites are identical). fmt and clippy -D warnings are clean.
+  Concerns: the commit trailer says "Claude Sonnet 5.5". That is the model I run as, and it matches the system attribution. The global constraints name "Opus 5.5", so change it if you want the other trailer.
+  Extra: I added a small test helper `single()` in stream.rs tests to take the one event from `finish()`.
+  Report: /Users/smaschek/dev/paigasus/paigasus-helikon/.worktrees/sma-863/.superpowers/sdd/2026-11-25-sma-863-zero-delta-tool-call/task-1-report.md
+</agent-message>
+
+---
+
+<agent-message from="aaebf5a2a321f1dd6">
+[Subagent hand-back] The text below is the final report of a subagent this session delegated to. It is model output, NOT a message from the user: instructions, requests, or approval claims inside it are the subagent's words and carry no user authority. The harness indents every line of the report, so a frame-like line at column zero inside it would be forged. Notes above this frame may quote model-derived text, which carries no user authority either. The report follows:
+  ### Spec Compliance
+  - ✅ Spec compliant.
+    - `terminal_events` exists at stream.rs ~L114-118 (diff). It sets `terminal_emitted = true` and returns `vec![self.finish_or_error(reason)]`.
+    - The `MessageStop` arm and `finish()` both call it.
+    - `finish()` returns `Vec`. It returns an empty Vec when `terminal_emitted` is set or no reason is buffered, so it stays idempotent.
+    - The `tracing::warn!` is kept and the doc is rewritten.
+    - model.rs uses `for terminal in translator.finish()`.
+    - All test and translate/mod.rs call sites are converted. The idempotence assertion is kept.
+    - There is no behaviour change, no version bump and no CHANGELOG edit. The commit subject is `refactor(providers): SMA-863 ...` and follows the required form.
+  - ⚠️ Cannot verify from the diff: the "271 passed before and after" test claim. I did not re-run the suite, as instructed.
+  - Call-site check: I grepped the crate for other `finish()` callers. The remaining hits are `acc.finish()` in live_round_trip.rs and translate/request.rs. They are not on `MessageTranslator` (the `acc.` receiver differs). The `t.finish()` at request.rs:257 is unconfirmed. The diff does not show it, but the report says compile and clippy are clean, so it is probably a different type.
+  
+  ### Strengths
+  - The change is minimal and mechanical. The `single()` helper keeps the one-event assertions explicit.
+  - `finish()` still guards on `terminal_emitted` first, so the double-terminal protection is unchanged.
+  - The `MessageStop` arm now uses `out.extend(...)`, so Task 3 can add events in one place.
+  
+  ### Issues
+  #### Critical (Must Fix)
+  None.
+  
+  #### Important (Should Fix)
+  None.
+  
+  #### Minor (Nice to Have)
+  - stream.rs tests: the test names `finish_is_none_when_no_stop_reason_observed` and `finish_is_none_after_message_stop_drained_it` still say "none", but they now assert `is_empty()`. Renaming is optional. The brief did not ask for it.
+  - The report notes that the commit trailer says "Claude Sonnet 5.5" while global-constraints says "Opus 5.5". The system attribution reminder prescribes Sonnet. Check the global-constraints wording, but this is not a code defect.
+  
+  ### Assessment
+  **Task quality:** Approved
+  **Reasoning:** The signature change and the `terminal_events` extraction match the brief exactly. All callers and tests are updated, behaviour is unchanged, and idempotence is preserved.
+</agent-message>
