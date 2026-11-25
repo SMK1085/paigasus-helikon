@@ -116,7 +116,7 @@ impl Model for AnthropicModel {
                     // event. Deliberately NOT done on the cancellation arm
                     // above or the transport-error arm (below).
                     None => {
-                        if let Some(terminal) = translator.finish() {
+                        for terminal in translator.finish() {
                             yield terminal;
                         }
                         return;

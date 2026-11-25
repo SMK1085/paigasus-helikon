@@ -230,8 +230,7 @@ impl MessageTranslator {
             AnthropicEvent::MessageStop => {
                 if let Some(reason) = self.stop_reason.take() {
                     if !self.terminal_emitted {
-                        self.terminal_emitted = true;
-                        out.push(self.finish_or_error(&reason));
+                        out.extend(self.terminal_events(&reason));
                     }
                 }
             }
@@ -339,7 +338,7 @@ impl MessageTranslator {
     /// Flush a stop reason buffered from `message_delta` when the response
     /// body ends cleanly before `message_stop` arrived.
     ///
-    /// Returns `None` when a terminal event was already emitted — the
+    /// Returns an empty `Vec` when a terminal event was already emitted — the
     /// well-formed path, where `message_stop` drained the buffer — or when no
     /// stop reason was ever observed. A stream that ended *before*
     /// `message_delta` is never reported as a clean `Stop`; one that ended
@@ -353,18 +352,25 @@ impl MessageTranslator {
     ///
     /// **Clean-EOF path only.** Never call this on the cancellation or
     /// transport-error paths — see `model.rs`.
-    pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
+    pub(crate) fn finish(&mut self) -> Vec<Result<ModelEvent, ModelError>> {
         if self.terminal_emitted {
-            return None;
+            return Vec::new();
         }
-        let reason = self.stop_reason.take()?;
-        self.terminal_emitted = true;
+        let Some(reason) = self.stop_reason.take() else {
+            return Vec::new();
+        };
         tracing::warn!(
             target: "paigasus::anthropic::stream",
             stop_reason = %reason,
             "stream body ended without message_stop; flushing buffered stop reason",
         );
-        Some(self.finish_or_error(&reason))
+        self.terminal_events(&reason)
+    }
+
+    /// Mark the terminal event as emitted and return the events that end the stream.
+    fn terminal_events(&mut self, reason: &str) -> Vec<Result<ModelEvent, ModelError>> {
+        self.terminal_emitted = true;
+        vec![self.finish_or_error(reason)]
     }
 
     fn finish_or_error(&self, reason: &str) -> Result<ModelEvent, ModelError> {
@@ -406,6 +412,12 @@ mod tests {
     use crate::sse::{
         AnthropicErrorPayload, ContentBlockHead, MessageDeltaPayload, MessageStartPayload,
     };
+
+    /// Take the one event a `finish()` call must return.
+    fn single(v: Vec<Result<ModelEvent, ModelError>>) -> Result<ModelEvent, ModelError> {
+        assert_eq!(v.len(), 1, "a buffered reason must flush");
+        v.into_iter().next().unwrap()
+    }
 
     fn message_start(input: u32, cached: Option<u32>) -> AnthropicEvent {
         AnthropicEvent::MessageStart {
@@ -716,7 +728,7 @@ mod tests {
             "nothing may follow the terminal event, got {second_delta_out:?}"
         );
         assert!(
-            t.finish().is_none(),
+            t.finish().is_empty(),
             "a second stop reason must not yield a second terminal event"
         );
     }
@@ -766,7 +778,7 @@ mod tests {
                 usage: Some(MessageDeltaUsage { output_tokens: 5 }),
             })
             .unwrap();
-        match t.finish().expect("a buffered reason must flush") {
+        match single(t.finish()) {
             Ok(ModelEvent::Finish { reason }) => assert_eq!(reason, FinishReason::Stop),
             other => panic!("expected Ok(Finish::Stop), got {other:?}"),
         }
@@ -786,7 +798,7 @@ mod tests {
                 usage: None,
             })
             .unwrap();
-        match t.finish().expect("a buffered reason must flush") {
+        match single(t.finish()) {
             Ok(ModelEvent::Finish { reason }) => assert_eq!(reason, FinishReason::ToolCalls),
             other => panic!("expected Ok(Finish::ToolCalls), got {other:?}"),
         }
@@ -802,7 +814,7 @@ mod tests {
             content_block: ContentBlockHead::Text,
         });
         assert!(
-            t.finish().is_none(),
+            t.finish().is_empty(),
             "no stop reason was observed; nothing to flush"
         );
     }
@@ -823,10 +835,10 @@ mod tests {
             .unwrap();
         assert_eq!(t.consume(AnthropicEvent::MessageStop).unwrap().len(), 1);
         assert!(
-            t.finish().is_none(),
+            t.finish().is_empty(),
             "message_stop already emitted the terminal event"
         );
-        assert!(t.finish().is_none(), "finish() must be idempotent");
+        assert!(t.finish().is_empty(), "finish() must be idempotent");
     }
 
     /// A refusal observed before truncation surfaces as an error, not silence.
@@ -842,7 +854,7 @@ mod tests {
                 usage: None,
             })
             .unwrap();
-        match t.finish().expect("a buffered reason must flush") {
+        match single(t.finish()) {
             Err(ModelError::Refused { .. }) => {}
             other => panic!("expected Err(Refused), got {other:?}"),
         }
@@ -879,7 +891,7 @@ mod tests {
                 usage: None,
             })
             .unwrap();
-        match t.finish().expect("a buffered reason must flush") {
+        match single(t.finish()) {
             Err(ModelError::Other(_)) => {}
             other => panic!("expected Err(Other), got {other:?}"),
         }
@@ -901,7 +913,7 @@ mod tests {
                 out.push(item.unwrap());
             }
         }
-        if let Some(last) = t.finish() {
+        for last in t.finish() {
             out.push(last.unwrap());
         }
         out
@@ -1422,7 +1434,7 @@ mod tests {
                 json_delta(1, "{\"q\":1}"),
             ],
         );
-        assert!(t.finish().is_none());
+        assert!(t.finish().is_empty());
         assert_eq!(
             provider_data(&events),
             vec![(block(0, "", "SIG_FAKE_1"), None)]
