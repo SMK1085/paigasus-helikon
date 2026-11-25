@@ -234,8 +234,10 @@ a stop: report it. No `.snap.new` file stays in the tree.
 5. Anthropic API: Sven decided at the spec gate that the key comes from the
    repository `.env` file. The agent may not read `.env`, so Sven copies it
    into the worktree (or exports `ANTHROPIC_API_KEY` into the session). The
-   tests do not load `.env` themselves. Then run
-   `cargo test -p paigasus-helikon-providers-anthropic -- --ignored --nocapture`.
+   tests do not load `.env` themselves, so a copy alone sets no key. Load the
+   copy into the same shell command that runs Cargo:
+   `set -a; . ./.env; set +a; cargo test -p paigasus-helikon-providers-anthropic -- --ignored --nocapture`.
+   An exported `ANTHROPIC_API_KEY` needs no load step.
    This covers both the `live` test target and the `live_round_trip` lib tests.
    Every test must pass, and no test may skip for a missing key. If a test
    fails, run it once more. If it fails again, stop and report. The `.env` copy
