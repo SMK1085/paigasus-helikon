@@ -1583,6 +1583,33 @@ mod litellm {
         }))
     }
 
+    /// The six `data:` values of `fixtures/litellm/zero_arg_tool_call.raw`,
+    /// byte for byte, in file order. The last is `[DONE]`. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_CHUNKS: [&str; 6] = [
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","role":"assistant","tool_calls":[{"id":"toolu_01Ph5aTG6RG9RAhP9Q6F3Hmg","function":{"arguments":"","name":"get_current_time"},"type":"function","index":0,"caller":{"type":"direct"}}]}}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"function":{"arguments":""},"type":"function","index":0}]}}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"function":{"arguments":"{}"},"type":"function","index":0}]}}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","object":"chat.completion.chunk","created":1795553946,"model":"zero-arg-anthropic","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"##,
+        r##"{"id":"chatcmpl-8dcb0076-1d0c-4623-a467-a321ea324374","created":1795553946,"model":"zero-arg-anthropic","object":"chat.completion.chunk","choices":[{"index":0,"delta":{}}],"usage":{"completion_tokens":11,"prompt_tokens":485,"total_tokens":496,"completion_tokens_details":{"reasoning_tokens":0,"text_tokens":11},"prompt_tokens_details":{"cached_tokens":0,"text_tokens":485,"cache_write_tokens":0,"cache_creation_tokens":0,"cache_creation_token_details":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"inference_geo":"global"}}"##,
+        r##"[DONE]"##,
+    ];
+
+    /// The one call of [`ZERO_ARG_CHUNKS`]: the tool name and the literal `{}`
+    /// that the proxy streams as its arguments.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/litellm/zero_arg_tool_call.raw");
+
+    /// One captured SSE frame: `data: {payload}\n\n`.
+    fn captured_frame(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
@@ -1690,8 +1717,27 @@ mod litellm {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/litellm/zero_arg_tool_call.raw`, CAPTURED from a
+            // LiteLLM 1.98.0 proxy (`ghcr.io/berriai/litellm@sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305`)
+            // on `/v1/chat/completions`, 2026-11-24 20:59:06 UTC. The wire
+            // `model` is the proxy alias `zero-arg-anthropic`. It routes to
+            // the upstream `anthropic/claude-haiku-5-5`. The request and the
+            // proxy config are in `fixtures/litellm/`. The proxy streams the
+            // arguments as `""`, `""` and then the literal `{}`. Six frames:
+            // the tool-call start, an empty argument delta, the `{}` delta,
+            // the finish chunk, the usage chunk and `[DONE]`.
+            //
+            // Edits made here: none to any payload. The script sends the six
+            // `data:` values byte for byte ([`ZERO_ARG_CHUNKS`]). Each one
+            // becomes one `data:` frame that ends with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => {
+                let chunks = ZERO_ARG_CHUNKS
+                    .iter()
+                    .copied()
+                    .map(captured_frame)
+                    .collect();
+                (chunks, None, Ending::Clean)
+            }
         };
 
         Some(Script {
@@ -1727,6 +1773,17 @@ mod litellm {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         req
     }
@@ -1775,7 +1832,9 @@ mod litellm {
                 Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
                     Some(FinishReason::Stop)
                 }
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely, and so must `FragmentedToolName`, whose
                 // script ends before any finish_reason chunk arrives.
@@ -1787,8 +1846,7 @@ mod litellm {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -1798,9 +1856,12 @@ mod litellm {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                _ => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -1816,11 +1877,6 @@ mod litellm {
             // them exists (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture of
-            // one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1891,6 +1947,7 @@ mod litellm {
                 tool_call_name_fragment("weather"),
             ),
             ("tool_call args", tool_call_args("{\"city\":\"Berlin\"}")),
+            ("zero-arg tool chunk", captured_frame(ZERO_ARG_CHUNKS[2])),
         ] {
             assert!(
                 !contains(&frame, FINISH_REASON_MARKER),
@@ -1900,6 +1957,28 @@ mod litellm {
                  that null value."
             );
         }
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED from the LiteLLM 1.98.0 proxy
+    /// `ghcr.io/berriai/litellm@sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305`
+    /// at `/v1/chat/completions`. The wire `model` is the proxy alias
+    /// `zero-arg-anthropic`. The upstream model is `anthropic/claude-haiku-5-5`.
+    /// The capture ran on 2026-11-24 at 20:59:06 UTC. The request and the
+    /// proxy config are in `fixtures/litellm/`. The file is 1739 bytes. Its
+    /// SHA-256 is
+    /// `b81bc790cdcf6a93e1ef6e8391a353a344d95549ef08a412ee0f7c1f241552c7`.
+    /// Finding: the proxy streams the arguments as the deltas `""`, `""` and
+    /// `"{}"`. The upstream call was not captured. So the source of the `{}`
+    /// is an inference (spec section 4, finding 5).
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 6);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]

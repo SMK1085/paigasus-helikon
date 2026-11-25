@@ -180,12 +180,6 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
         "no captured zero-argument tool-call stream",
         "SMA-860",
     ),
-    (
-        "litellm",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
 ];
 
 /// The scenarios that [`UNCAPTURED`] may name. Moving an older scenario into
