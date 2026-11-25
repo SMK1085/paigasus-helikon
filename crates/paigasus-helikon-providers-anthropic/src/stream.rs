@@ -409,7 +409,51 @@ impl MessageTranslator {
     /// Mark the terminal event as emitted and return the events that end the stream.
     fn terminal_events(&mut self, reason: &str) -> Vec<Result<ModelEvent, ModelError>> {
         self.terminal_emitted = true;
-        vec![self.finish_or_error(reason)]
+        let result = self.finish_or_error(reason);
+        let mut out = Vec::new();
+        if matches!(
+            result,
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ) {
+            // Safety net: a tool block with no block stop and no input delta
+            // never got its name. Name it before the terminal event.
+            let mut unnamed: Vec<u32> = self
+                .blocks
+                .iter()
+                .filter_map(|(index, state)| match state {
+                    BlockState::ToolUse {
+                        name_emitted: false,
+                        synthesized: false,
+                        ..
+                    } => Some(*index),
+                    _ => None,
+                })
+                .collect();
+            unnamed.sort_unstable();
+            for index in unnamed {
+                if let Some(BlockState::ToolUse {
+                    call_id,
+                    name,
+                    name_emitted,
+                    start_args,
+                    ..
+                }) = self.blocks.get_mut(&index)
+                {
+                    tracing::warn!(
+                        target: "paigasus::anthropic::stream",
+                        index,
+                        %call_id,
+                        "terminal tool_use with an unclosed block that sent no name; emitting its name",
+                    );
+                    *name_emitted = true;
+                    out.push(Ok(emit_unnamed(call_id, name, start_args)));
+                }
+            }
+        }
+        out.push(result);
+        out
     }
 
     fn finish_or_error(&self, reason: &str) -> Result<ModelEvent, ModelError> {
@@ -1727,5 +1771,175 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed and the block stop removed.
+    #[test]
+    fn net_names_unclosed_tool_block_on_message_stop() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "t")),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert_eq!(
+            call_deltas(&events),
+            vec![("tu_1".to_owned(), Some("t".to_owned()), String::new())]
+        );
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed and the block stop removed.
+    #[test]
+    fn net_names_unclosed_tool_block_on_finish() {
+        let mut t = MessageTranslator::new(false);
+        run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "t")),
+                message_delta("tool_use"),
+            ],
+        );
+        let out: Vec<ModelEvent> = t.finish().into_iter().map(|r| r.unwrap()).collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            call_deltas(&out),
+            vec![("tu_1".to_owned(), Some("t".to_owned()), String::new())]
+        );
+        assert!(matches!(
+            out[1],
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            }
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed and the block stop removed.
+    #[test]
+    fn net_does_not_fire_for_other_stop_reasons() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "t")),
+                message_delta("max_tokens"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert!(call_deltas(&events).is_empty());
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::Length
+            })
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Two tool blocks at
+    /// indices 2 and 1, built from the single-block zero-argument capture.
+    #[test]
+    fn net_names_two_unclosed_blocks_in_index_order() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(2, tool_head("tu_b", "b")),
+                start(1, tool_head("tu_a", "a")),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        let ids: Vec<String> = call_deltas(&events).into_iter().map(|d| d.0).collect();
+        assert_eq!(ids, vec!["tu_a".to_owned(), "tu_b".to_owned()]);
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Block 0 gets its name
+    /// from an input delta, block 1 gets none; neither has a block stop.
+    #[test]
+    fn net_skips_a_block_that_already_has_its_name() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_0", "a")),
+                json_delta(0, "{}"),
+                start(1, tool_head("tu_1", "b")),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        let named: Vec<String> = call_deltas(&events)
+            .into_iter()
+            .filter(|d| d.1.is_some())
+            .map(|d| d.0)
+            .collect();
+        assert_eq!(named, vec!["tu_0".to_owned(), "tu_1".to_owned()]);
+        let finish_pos = events.len() - 1;
+        let last_named = events
+            .iter()
+            .rposition(|e| matches!(e, ModelEvent::ToolCallDelta { name: Some(_), .. }))
+            .unwrap();
+        assert!(last_named < finish_pos);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed and the block stop removed.
+    #[test]
+    fn finish_twice_after_net_flush_is_empty() {
+        let mut t = MessageTranslator::new(false);
+        run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "t")),
+                message_delta("tool_use"),
+            ],
+        );
+        assert_eq!(t.finish().len(), 2);
+        assert!(t.finish().is_empty());
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed and the block stop removed.
+    #[test]
+    fn late_block_stop_after_net_flush_emits_nothing() {
+        let mut t = MessageTranslator::new(false);
+        run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "t")),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert!(t.consume(stop(0)).unwrap().is_empty());
     }
 }
