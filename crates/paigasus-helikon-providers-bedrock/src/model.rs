@@ -155,6 +155,8 @@ impl Model for BedrockModel {
                     // a terminal Finish.
                     Ok(None) => {
                         for ev in translator.finish() {
+                            // No event after cancellation, so no Finish after cancel.
+                            if cancel.is_cancelled() { return; }
                             yield ev;
                         }
                         return;
@@ -162,6 +164,8 @@ impl Model for BedrockModel {
                     // Good event — feed through translator and yield results.
                     Ok(Some(event)) => {
                         for result in translator.consume(event) {
+                            // No event after cancellation, so no Finish after cancel.
+                            if cancel.is_cancelled() { return; }
                             yield result;
                         }
                     }

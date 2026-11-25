@@ -117,6 +117,8 @@ impl Model for AnthropicModel {
                     // above or the transport-error arm (below).
                     None => {
                         for terminal in translator.finish() {
+                            // No event after cancellation, so no Finish after cancel.
+                            if cancel.is_cancelled() { return; }
                             yield terminal;
                         }
                         return;
@@ -149,6 +151,8 @@ impl Model for AnthropicModel {
                             }
                             Ok(events) => {
                                 for ev in events {
+                                    // No event after cancellation, so no Finish after cancel.
+                                    if cancel.is_cancelled() { return; }
                                     yield ev;
                                 }
                             }
