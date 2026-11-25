@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "442908de8200",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-860-capture-a-zero-argument-tool-call-stream-for",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/provider-stream-conformance/src/declines.rs",
+    "tests/provider-stream-conformance/src/lib.rs",
+    "tests/provider-stream-conformance/tests/conformance.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/2908de8200/0/metadata.json",
+      "transcript": "/44/2908de8200/0/full.jsonl",
+      "compact_transcript": "/44/2908de8200/0/transcript.jsonl",
+      "content_hash": "/44/2908de8200/0/content_hash.txt",
+      "prompt": "/44/2908de8200/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 7190,
+    "cache_read_tokens": 1527531,
+    "output_tokens": 2962,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 30,
+      "cache_creation_tokens": 156572,
+      "cache_read_tokens": 1248847,
+      "output_tokens": 11389,
+      "api_call_count": 15
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 369,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 10,
+      "credentialed_uri": 0,
+      "entropy": 365,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
