@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HWEeY1m6doFGbJW26YnMNm",
+  "agent_id": "a49128f531eaa4ed8",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix cancel check between yields",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 92951,
+    "cache_read_tokens": 665216,
+    "output_tokens": 5218,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-25T22:32:57.480687+01:00",
+  "completed_at": "2026-11-25T22:34:26.505961+01:00"
+}
