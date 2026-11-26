@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.6...paigasus-helikon-providers-bedrock-v0.3.7) - 2026-11-26
+
+### Fixed
+
+- *(providers)* SMA-863 emit a tool call delta for a tool call with no input delta ([#402](https://github.com/SMK1085/paigasus-helikon/pull/402))
+- *(providers)* SMA-850 replace the retired claude 3.x model ids ([#399](https://github.com/SMK1085/paigasus-helikon/pull/399))
+
 ## [0.3.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.5...paigasus-helikon-providers-bedrock-v0.3.6) - 2026-11-22
 
 ### Other
