@@ -154,14 +154,18 @@ impl Model for BedrockModel {
                     // subsequent Metadata event so the consumer always sees
                     // a terminal Finish.
                     Ok(None) => {
-                        if let Some(terminal) = translator.finish() {
-                            yield terminal;
+                        for ev in translator.finish() {
+                            // No event after cancellation, so no Finish after cancel.
+                            if cancel.is_cancelled() { return; }
+                            yield ev;
                         }
                         return;
                     }
                     // Good event — feed through translator and yield results.
                     Ok(Some(event)) => {
                         for result in translator.consume(event) {
+                            // No event after cancellation, so no Finish after cancel.
+                            if cancel.is_cancelled() { return; }
                             yield result;
                         }
                     }

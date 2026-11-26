@@ -136,3 +136,66 @@ async fn uncancelled_stream_emits_exactly_one_finish() {
         "Finish must be last, got {emitted:#?}"
     );
 }
+
+/// SMA-863: the clean-EOF drain yields several events (a safety-net
+/// `ToolCallDelta`, then `Finish`). A consumer that cancels after the first
+/// one must not receive the `Finish`.
+///
+/// The body is an inline, hand-authored stream: a tool block that is never
+/// stopped and gets no input delta, a `message_delta` with `tool_use`, then
+/// EOF with no `message_stop`. `finish()` then returns both events at once.
+#[tokio::test]
+async fn cancel_between_buffered_events_yields_no_finish() {
+    let body = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":0}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"lookup\",\"input\":{}}}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n\n",
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(body, "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+
+    let model = AnthropicModel::messages("claude-sonnet-4-6")
+        .api_key("sk-test")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+
+    let cancel = CancellationToken::new();
+    let mut req = ModelRequest::new();
+    req.messages = vec![user("hi")];
+    let mut s = model.invoke(req, cancel.clone()).await.expect("invoke");
+
+    let mut emitted = Vec::new();
+    let mut cancelled = false;
+    while let Some(item) = s.next().await {
+        let ev = item.expect("no error expected");
+        if !cancelled && matches!(ev, ModelEvent::ToolCallDelta { .. }) {
+            // The next event of this drain is `Finish`. Cancel before it.
+            cancel.cancel();
+            cancelled = true;
+        }
+        emitted.push(ev);
+    }
+
+    assert!(
+        cancelled,
+        "control: the safety-net ToolCallDelta must arrive, got {emitted:#?}"
+    );
+    assert!(
+        !emitted
+            .iter()
+            .any(|e| matches!(e, ModelEvent::Finish { .. })),
+        "Finish after cancellation: {emitted:#?}"
+    );
+}

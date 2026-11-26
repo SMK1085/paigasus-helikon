@@ -17,7 +17,10 @@
 //! `Finish`. Because Bedrock emits `Metadata` (where usage lives) **after**
 //! `MessageStop` (where the stop reason lives), this translator buffers the
 //! stop reason when `MessageStop` arrives and emits nothing until `Metadata`
-//! arrives — at that point it emits `Usage` immediately followed by `Finish`.
+//! arrives. At that point it emits `Usage`, then any safety-net
+//! `ToolCallDelta`s for tool blocks that never got a name, then `Finish`.
+//! The core contract allows `Usage` anywhere and only requires `Finish` to be
+//! terminal, so the deltas between `Usage` and `Finish` are valid.
 //!
 //! If (contrary to the typical wire order) `Metadata` arrives **before**
 //! `MessageStop`, `Usage` is emitted immediately on `Metadata` and `Finish`
@@ -50,6 +53,9 @@ enum BlockState {
         /// appears only in that first delta; subsequent deltas set it to
         /// `None`).
         name_emitted: bool,
+        /// `true` for the structured-output anchor block. It never emits a
+        /// `ToolCallDelta`; its input is remapped to `TokenDelta`s.
+        synthesized: bool,
     },
 }
 
@@ -91,6 +97,8 @@ pub struct StreamTranslator {
     pending_stop_reason: Option<StopReason>,
     /// `true` once a `Metadata` event has been processed.
     metadata_seen: bool,
+    /// `true` once a terminal event (`Finish` or an `Err`) was produced.
+    terminal_emitted: bool,
 }
 
 impl StreamTranslator {
@@ -129,7 +137,26 @@ impl StreamTranslator {
         match ev {
             // ── events that produce no output ─────────────────────────────────
             ConverseStreamOutput::MessageStart(_) => {}
-            ConverseStreamOutput::ContentBlockStop(_) => {}
+
+            // ── content block stop ────────────────────────────────────────────
+            ConverseStreamOutput::ContentBlockStop(e) => {
+                // After a terminal event nothing may follow it.
+                if self.terminal_emitted {
+                    return out;
+                }
+                let idx = e.content_block_index();
+                if let Some(event) = self.emit_unnamed(idx) {
+                    if let ModelEvent::ToolCallDelta { call_id, .. } = &event {
+                        tracing::debug!(
+                            target: "paigasus::bedrock::stream",
+                            index = idx,
+                            %call_id,
+                            "toolUse block closed with no input delta; emitting its name",
+                        );
+                    }
+                    out.push(Ok(event));
+                }
+            }
 
             // ── content block start ───────────────────────────────────────────
             ConverseStreamOutput::ContentBlockStart(e) => {
@@ -139,7 +166,8 @@ impl StreamTranslator {
                         let call_id = tu.tool_use_id().to_owned();
                         let name = tu.name().to_owned();
 
-                        if self.synthesizing && name == SYNTHESIZED_TOOL_NAME {
+                        let synthesized = self.synthesizing && name == SYNTHESIZED_TOOL_NAME;
+                        if synthesized {
                             if self.native && self.synthesized_block_index.is_none() {
                                 tracing::warn!(
                                     target: "paigasus::bedrock::stream",
@@ -153,6 +181,7 @@ impl StreamTranslator {
                             // silent: the error is emitted once per stream.
                             if !self.refused_tool_call {
                                 self.refused_tool_call = true;
+                                self.terminal_emitted = true;
                                 out.push(Err(ModelError::Other(anyhow::anyhow!(
                                     "the model called a tool, but tool_choice is None"
                                 ))));
@@ -160,12 +189,10 @@ impl StreamTranslator {
                             return out;
                         } else {
                             self.real_tool_fired = true;
-                            // Emit the name-carrying delta immediately on block
-                            // start (mirrors the Anthropic provider's behaviour
-                            // of emitting name on the first input-json delta).
-                            // We *don't* emit here — we wait for the first
-                            // tool-input delta so the call_id→state map is
-                            // consistent.
+                            // The name goes out with the first input delta,
+                            // or at the block stop when no delta came
+                            // (SMA-863). Nothing is emitted at the start, so
+                            // the call_id→state map stays consistent.
                         }
                         self.blocks.insert(
                             idx,
@@ -173,6 +200,7 @@ impl StreamTranslator {
                                 call_id,
                                 name,
                                 name_emitted: false,
+                                synthesized,
                             },
                         );
                     }
@@ -204,6 +232,7 @@ impl StreamTranslator {
                             call_id,
                             name,
                             name_emitted,
+                            ..
                         }) = self.blocks.get_mut(&idx)
                         {
                             let emit_name = if *name_emitted {
@@ -293,26 +322,58 @@ impl StreamTranslator {
     /// (EOF) without having emitted a `Metadata` event.
     ///
     /// Returns the terminal `Finish` event (or a `ModelError::Other` for the
-    /// both-tools-fired error condition) if a stop reason is still pending,
-    /// or `None` if the stream already emitted its terminal event through the
-    /// normal `Metadata`→`Finish` path.
+    /// both-tools-fired error condition) if a stop reason is still pending.
+    /// Returns an empty `Vec` if the stream already emitted its terminal event
+    /// through the normal `Metadata`→`Finish` path.
+    ///
+    /// It can also return safety-net `ToolCallDelta`s, ahead of the terminal
+    /// event, that name a tool block left open when the stream ended. It
+    /// returns an empty `Vec` after a refused tool call.
     ///
     /// **Call this only on the EOF path, not on the cancellation path.**
     /// Cancellation must end the stream without emitting `Finish`.
-    pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
-        self.pending_stop_reason
-            .take()
-            .and_then(|reason| self.finish_events(reason).into_iter().next())
+    pub(crate) fn finish(&mut self) -> Vec<Result<ModelEvent, ModelError>> {
+        match self.pending_stop_reason.take() {
+            Some(reason) => self.finish_events(reason),
+            None => Vec::new(),
+        }
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
+
+    /// Build the zero-delta `ToolCallDelta` for the tool block at `idx`.
+    ///
+    /// Returns `Some` only when the block is a non-synthesized `ToolUse` whose
+    /// name has not gone out yet, and then sets `name_emitted`. The block stays
+    /// in the map so a late delta still finds it.
+    fn emit_unnamed(&mut self, idx: i32) -> Option<ModelEvent> {
+        match self.blocks.get_mut(&idx) {
+            Some(BlockState::ToolUse {
+                call_id,
+                name,
+                name_emitted,
+                synthesized,
+            }) if !*name_emitted && !*synthesized => {
+                *name_emitted = true;
+                Some(ModelEvent::ToolCallDelta {
+                    call_id: call_id.clone(),
+                    name: Some(name.clone()),
+                    args_delta: String::new(),
+                })
+            }
+            _ => None,
+        }
+    }
 
     /// Translate a `StopReason` into the terminal event(s).
     ///
     /// Returns a single `Ok(Finish{..})` in normal cases, or a single
     /// `Err(ModelError::Other)` when both a real and the synthesized tool
-    /// fired in synthesis mode.
-    fn finish_events(&self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
+    /// fired in synthesis mode. When the terminal is `Finish(ToolCalls)`, it
+    /// first returns one zero-delta `ToolCallDelta` for each tool block that
+    /// has no name sent (the safety net), in index order. It sets
+    /// `terminal_emitted` when it returns a non-empty `Vec`.
+    fn finish_events(&mut self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
         // A refused tool call already ended the stream with an error. As on the
         // both-tools-fired path, the error replaces the terminal `Finish`.
         if self.refused_tool_call {
@@ -355,7 +416,45 @@ impl StreamTranslator {
                 reason: FinishReason::Other(other.as_str().to_owned()),
             }),
         };
-        vec![finish]
+        let mut out = Vec::new();
+        // Safety net: a tool block that never got its block stop still has no
+        // name on the wire. Name it before the terminal `Finish(ToolCalls)`.
+        if matches!(
+            &finish,
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ) {
+            let mut unnamed: Vec<i32> = self
+                .blocks
+                .iter()
+                .filter_map(|(idx, block)| match block {
+                    BlockState::ToolUse {
+                        name_emitted: false,
+                        synthesized: false,
+                        ..
+                    } => Some(*idx),
+                    _ => None,
+                })
+                .collect();
+            unnamed.sort_unstable();
+            for idx in unnamed {
+                if let Some(delta) = self.emit_unnamed(idx) {
+                    if let ModelEvent::ToolCallDelta { call_id, .. } = &delta {
+                        tracing::warn!(
+                            target: "paigasus::bedrock::stream",
+                            index = idx,
+                            %call_id,
+                            "terminal tool_use with an unclosed block that sent no name; emitting its name",
+                        );
+                    }
+                    out.push(Ok(delta));
+                }
+            }
+        }
+        out.push(finish);
+        self.terminal_emitted = true;
+        out
     }
 }
 
@@ -883,7 +982,7 @@ mod tests {
         ] {
             out.extend(t.consume(ev));
         }
-        assert!(t.finish().is_none(), "finish() must add nothing");
+        assert!(t.finish().is_empty(), "finish() must add nothing");
         assert_eq!(out.len(), 2, "got {out:?}");
         assert!(out[0].is_err(), "expected Err first, got {:?}", out[0]);
         assert!(
@@ -904,7 +1003,7 @@ mod tests {
             out.extend(t.consume(ev));
         }
         assert_eq!(out.len(), 1, "got {out:?}");
-        assert!(t.finish().is_none());
+        assert!(t.finish().is_empty());
     }
 
     #[test]
@@ -970,9 +1069,9 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    /// ContentBlockStop → no events emitted.
+    /// ContentBlockStop of a block that never started → no events emitted.
     #[test]
-    fn content_block_stop_produces_no_events() {
+    fn content_block_stop_of_unknown_block_produces_no_events() {
         let out = run(false, vec![content_block_stop(0)]);
         assert!(out.is_empty());
     }
@@ -994,25 +1093,25 @@ mod tests {
         );
 
         // EOF path: call finish() and expect the terminal Finish(Stop).
-        let terminal = t
-            .finish()
-            .expect("finish() must return Some when stop reason is buffered");
+        let mut fin = t.finish();
+        assert_eq!(fin.len(), 1, "got {fin:?}");
+        let terminal = fin.remove(0);
         assert!(
             matches!(terminal, Ok(ModelEvent::Finish { ref reason }) if *reason == FinishReason::Stop),
             "expected Finish(Stop), got {terminal:?}"
         );
 
-        // A second call must return None (idempotent drain).
+        // A second call must return empty (idempotent drain).
         assert!(
-            t.finish().is_none(),
-            "finish() must return None after the pending reason was drained"
+            t.finish().is_empty(),
+            "finish() must return empty after the pending reason was drained"
         );
     }
 
     /// When the normal `Metadata`→`Finish` path has already fired,
-    /// `finish()` must return `None` (nothing left to flush).
+    /// `finish()` must return empty (nothing left to flush).
     #[test]
-    fn finish_returns_none_after_normal_metadata_path() {
+    fn finish_returns_empty_after_normal_metadata_path() {
         let mut t = StreamTranslator::new(false);
         t.consume(message_stop(StopReason::EndTurn));
         // Metadata arrives — translator drains pending_stop_reason internally.
@@ -1020,10 +1119,10 @@ mod tests {
         // out should contain Usage + Finish.
         assert_eq!(out.len(), 2);
 
-        // finish() must now return None — nothing is pending.
+        // finish() must now return empty — nothing is pending.
         assert!(
-            t.finish().is_none(),
-            "finish() must return None when Metadata already drained the pending reason"
+            t.finish().is_empty(),
+            "finish() must return empty when Metadata already drained the pending reason"
         );
     }
 
@@ -1039,11 +1138,47 @@ mod tests {
         let out = t.consume(message_stop(StopReason::ToolUse));
         assert!(out.is_empty(), "MessageStop alone must buffer");
 
-        let terminal = t.finish().expect("finish() must return Some");
+        let mut fin = t.finish();
+        assert_eq!(fin.len(), 1, "got {fin:?}");
+        let terminal = fin.remove(0);
         assert!(
             matches!(terminal, Err(ModelError::Other(_))),
             "expected Err(Other) for both-tools-fired; got {terminal:?}"
         );
+    }
+
+    /// A text turn through `MessageStop` and `Metadata` sets `terminal_emitted`.
+    #[test]
+    fn terminal_emitted_is_set_by_finish() {
+        let mut t = StreamTranslator::new(false);
+        t.consume(message_stop(StopReason::EndTurn));
+        t.consume(metadata(1, 1, None));
+        assert!(t.terminal_emitted);
+    }
+
+    /// A refused tool call pushes its `Err` and sets `terminal_emitted`.
+    #[test]
+    fn terminal_emitted_is_set_by_refused_tool_call() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        t.consume(tool_use_start(0, "tu", "t"));
+        assert!(t.terminal_emitted);
+    }
+
+    /// The both-tools `Err` is a terminal event and sets `terminal_emitted`.
+    #[test]
+    fn terminal_emitted_is_set_by_both_tools_error() {
+        let mut t = StreamTranslator::new(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME),
+            tool_use_start(1, "tu_real", "search"),
+            message_stop(StopReason::ToolUse),
+            metadata(1, 1, None),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert!(matches!(out.last(), Some(Err(_))), "got {out:?}");
+        assert!(t.terminal_emitted);
     }
 
     /// Collect the tool-call names and the final event of a run.
@@ -1056,6 +1191,223 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Collect the `ToolCallDelta`s of a run as `(name, args_delta)`.
+    fn tool_deltas(out: &[Result<ModelEvent, ModelError>]) -> Vec<(Option<String>, String)> {
+        out.iter()
+            .filter_map(|r| match r {
+                Ok(ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                }) => Some((name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed.
+    #[test]
+    fn tool_use_without_delta_emits_name_at_block_stop() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert!(out.iter().all(Result::is_ok), "{out:?}");
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(matches!(
+            out[0].as_ref().unwrap(),
+            ModelEvent::ToolCallDelta { call_id, name: Some(n), args_delta }
+                if call_id == "tu_1" && n == "get_current_time" && args_delta.is_empty()
+        ));
+        assert!(matches!(out[1].as_ref().unwrap(), ModelEvent::Usage { .. }));
+        assert!(matches!(
+            out[2].as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::ToolCalls
+        ));
+    }
+
+    /// The captured shape: one empty input delta, then the stop. One name only.
+    /// This is the capture zero_arg_tool_call.raw (SMA-860) as a unit test.
+    #[test]
+    fn captured_empty_delta_still_gives_one_name() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                tool_delta(0, ""),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(tool_call_names(&out), vec!["get_current_time".to_owned()]);
+        assert_eq!(
+            tool_deltas(&out),
+            vec![(Some("get_current_time".to_owned()), String::new())]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the stop reason set to max_tokens.
+    #[test]
+    fn block_stop_with_max_tokens_gives_named_call_then_length() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                message_stop(StopReason::MaxTokens),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_deltas(&out),
+            vec![(Some("get_current_time".to_owned()), String::new())]
+        );
+        assert!(matches!(
+            out.last().unwrap().as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::Length
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the tool renamed to the synthesized anchor.
+    #[test]
+    fn synthesized_tool_without_delta_emits_no_tool_call_delta() {
+        let out = run(
+            true,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_s", SYNTHESIZED_TOOL_NAME),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, Ok(ModelEvent::ToolCallDelta { .. }))),
+            "{out:?}"
+        );
+        assert!(matches!(
+            out.last().unwrap().as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::Stop
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with the block stop sent twice.
+    #[test]
+    fn repeated_block_stop_gives_one_name() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_deltas(&out),
+            vec![(Some("get_current_time".to_owned()), String::new())]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a block stop after the terminal event.
+    #[test]
+    fn block_stop_after_terminal_emits_nothing() {
+        let mut t = StreamTranslator::new(false);
+        t.consume(tool_use_start(0, "tu_1", "get_current_time"));
+        t.consume(message_stop(StopReason::ToolUse));
+        t.consume(metadata(10, 5, None));
+        assert!(t.terminal_emitted);
+        assert!(t.consume(content_block_stop(0)).is_empty());
+
+        let mut t = StreamTranslator::new(true);
+        for ev in [
+            tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME),
+            tool_use_start(1, "tu_real", "search"),
+            message_stop(StopReason::ToolUse),
+            metadata(1, 1, None),
+        ] {
+            t.consume(ev);
+        }
+        assert!(t.terminal_emitted);
+        assert!(t.consume(content_block_stop(1)).is_empty());
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a second tool block that has an input delta.
+    #[test]
+    fn parallel_calls_one_without_delta() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_a", "a"),
+                tool_delta(0, "{}"),
+                content_block_stop(0),
+                tool_use_start(1, "tu_b", "b"),
+                content_block_stop(1),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(tool_call_names(&out), vec!["a".to_owned(), "b".to_owned()]);
+        assert_eq!(
+            tool_deltas(&out),
+            vec![
+                (Some("a".to_owned()), "{}".to_owned()),
+                (Some("b".to_owned()), String::new()),
+            ]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with `tool_choice` set to `None`.
+    #[test]
+    fn forbid_tool_calls_block_stop_after_refusal_emits_nothing() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        let first = t.consume(tool_use_start(0, "tu_1", "t"));
+        assert!(matches!(first.as_slice(), [Err(_)]), "{first:?}");
+        assert!(t.consume(content_block_stop(0)).is_empty());
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with an input delta sent after the block stop.
+    #[test]
+    fn delta_after_block_stop_carries_no_name() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                tool_delta(0, "{}"),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_deltas(&out),
+            vec![
+                (Some("get_current_time".to_owned()), String::new()),
+                (None, "{}".to_owned()),
+            ]
+        );
     }
 
     /// A typed memory call on a native structured request is a normal tool
@@ -1104,5 +1456,200 @@ mod tests {
             out.last().unwrap().as_ref().unwrap(),
             ModelEvent::Finish { reason } if *reason == FinishReason::ToolCalls
         ));
+    }
+
+    /// Assert that `ev` is a named, zero-argument `ToolCallDelta`.
+    fn assert_named_delta(ev: &Result<ModelEvent, ModelError>, id: &str, tool: &str) {
+        assert!(
+            matches!(
+                ev.as_ref().unwrap(),
+                ModelEvent::ToolCallDelta { call_id, name: Some(n), args_delta }
+                    if call_id == id && n == tool && args_delta.is_empty()
+            ),
+            "{ev:?}"
+        );
+    }
+
+    /// Assert that `ev` is `Finish(ToolCalls)`.
+    fn assert_finish_tool_calls(ev: &Result<ModelEvent, ModelError>) {
+        assert!(
+            matches!(
+                ev.as_ref().unwrap(),
+                ModelEvent::Finish { reason } if *reason == FinishReason::ToolCalls
+            ),
+            "{ev:?}"
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the block stop removed.
+    #[test]
+    fn net_names_unclosed_block_metadata_after_message_stop() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(matches!(out[0].as_ref().unwrap(), ModelEvent::Usage { .. }));
+        assert_named_delta(&out[1], "tu_1", "get_current_time");
+        assert_finish_tool_calls(&out[2]);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the block stop removed, and with
+    /// the metadata event moved before the message stop.
+    #[test]
+    fn net_names_unclosed_block_message_stop_after_metadata() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                metadata(10, 5, None),
+                message_stop(StopReason::ToolUse),
+            ],
+        );
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(matches!(out[0].as_ref().unwrap(), ModelEvent::Usage { .. }));
+        assert_named_delta(&out[1], "tu_1", "get_current_time");
+        assert_finish_tool_calls(&out[2]);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the block stop removed, and with
+    /// the metadata event removed so the stream ends at EOF.
+    #[test]
+    fn net_names_unclosed_block_on_finish() {
+        let mut t = StreamTranslator::new(false);
+        let mut out = Vec::new();
+        for ev in [
+            message_start(),
+            tool_use_start(0, "tu_1", "get_current_time"),
+            message_stop(StopReason::ToolUse),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert!(out.is_empty(), "{out:?}");
+        let fin = t.finish();
+        assert_eq!(fin.len(), 2, "{fin:?}");
+        assert_named_delta(&fin[0], "tu_1", "get_current_time");
+        assert_finish_tool_calls(&fin[1]);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the block stop removed, and with
+    /// the stop reason set to end_turn.
+    #[test]
+    fn net_does_not_fire_for_other_stop_reasons() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                message_stop(StopReason::EndTurn),
+                metadata(10, 5, None),
+            ],
+        );
+        assert!(tool_deltas(&out).is_empty(), "{out:?}");
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. No capture has two tool
+    /// blocks. Built from the zero-delta stream with two blocks, opened in the
+    /// order 2 then 1, and no block stops.
+    #[test]
+    fn net_names_two_unclosed_blocks_in_index_order() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(2, "tu_2", "second"),
+                tool_use_start(1, "tu_1", "first"),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_call_names(&out),
+            vec!["first".to_owned(), "second".to_owned()]
+        );
+        assert_eq!(out.len(), 4, "{out:?}");
+        assert_named_delta(&out[1], "tu_1", "first");
+        assert_named_delta(&out[2], "tu_2", "second");
+        assert_finish_tool_calls(&out[3]);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with two blocks. Block 0 gets an input delta. Block 1
+    /// gets none. Neither block has a stop.
+    #[test]
+    fn net_skips_a_block_that_already_has_its_name() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_0", "named"),
+                tool_delta(0, "{}"),
+                tool_use_start(1, "tu_1", "unnamed"),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        let deltas = tool_deltas(&out);
+        assert_eq!(
+            deltas,
+            vec![
+                (Some("named".to_owned()), "{}".to_owned()),
+                (Some("unnamed".to_owned()), String::new()),
+            ]
+        );
+        assert_eq!(
+            tool_call_names(&out),
+            vec!["named".to_owned(), "unnamed".to_owned()]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the block stop removed, and a
+    /// second `finish` call after the flush.
+    #[test]
+    fn finish_twice_after_net_flush_is_empty() {
+        let mut t = StreamTranslator::new(false);
+        for ev in [
+            message_start(),
+            tool_use_start(0, "tu_1", "get_current_time"),
+            message_stop(StopReason::ToolUse),
+        ] {
+            let _ = t.consume(ev);
+        }
+        assert_eq!(t.finish().len(), 2);
+        assert!(t.finish().is_empty());
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the block stop removed, and a
+    /// block stop sent after the net flush.
+    #[test]
+    fn late_block_stop_after_net_flush_emits_nothing() {
+        let mut t = StreamTranslator::new(false);
+        for ev in [
+            message_start(),
+            tool_use_start(0, "tu_1", "get_current_time"),
+            message_stop(StopReason::ToolUse),
+            metadata(10, 5, None),
+        ] {
+            let _ = t.consume(ev);
+        }
+        assert!(t.consume(content_block_stop(0)).is_empty());
     }
 }

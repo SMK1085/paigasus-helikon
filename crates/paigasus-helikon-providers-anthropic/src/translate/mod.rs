@@ -977,7 +977,7 @@ mod round_trip {
                 out.push(item.unwrap());
             }
         }
-        if let Some(last) = t.finish() {
+        for last in t.finish() {
             out.push(last.unwrap());
         }
         out
@@ -1370,7 +1370,7 @@ mod round_trip {
                 out.push(item.unwrap());
             }
         }
-        out.extend(t.finish().map(Result::unwrap));
+        out.extend(t.finish().into_iter().map(Result::unwrap));
         // A later user turn, so that the assistant message is not the last
         // one and keeps its thinking blocks.
         let mut messages = vec![user_q()];
