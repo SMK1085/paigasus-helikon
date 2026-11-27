@@ -34,6 +34,7 @@ tokio-util            = { workspace = true }
 tracing               = { workspace = true }
 
 [dev-dependencies]
+paigasus-helikon-runtime-tokio = { workspace = true }
 wiremock = { workspace = true }
 insta    = { workspace = true, features = ["json", "yaml"] }
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
