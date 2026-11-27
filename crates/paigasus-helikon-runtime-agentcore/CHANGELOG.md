@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.4.6...paigasus-helikon-runtime-agentcore-v0.5.0) - 2026-11-27
+
+### Other
+
+- *(release)* SMA-868 move to `paigasus-helikon-providers-anthropic` 0.4
+- [**breaking**] The `example-anthropic` feature now uses `paigasus-helikon-providers-anthropic` 0.4, a breaking version. The API of this crate does not change.
+
+### Upgrade notes
+
+- If you enable `example-anthropic`, read the `paigasus-helikon-providers-anthropic` 0.4.0 upgrade notes.
+
 ## [0.4.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.4.5...paigasus-helikon-runtime-agentcore-v0.4.6) - 2026-11-26
 
 ### Other

@@ -7,11 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.6...paigasus-helikon-providers-anthropic-v0.4.0) - 2026-11-27
+
+### Added
+
+- *(providers-anthropic)* [**breaking**] SMA-868 add a `rustls-no-provider` feature and map http 4xx to `Rejected`
+- The features `rustls-aws-lc` and `rustls-no-provider`. `rustls-aws-lc` is the default feature and uses the aws-lc rustls provider, as before. With `rustls-no-provider`, the crate has no rustls provider. The host must install a rustls `CryptoProvider` as the process default before `build()`, or pass its own client with `http_client(...)`.
+- `BuildError::NoCryptoProvider`, `BuildError::HttpClient` and `BuildError::InvalidAuthCredential`.
+
+### Fixed
+
+- *(providers)* add rows for the current claude 5 models and fix the haiku 4.5 facts ([#403](https://github.com/SMK1085/paigasus-helikon/pull/403))
+- The API key is redacted in the `Debug` text, and the client sends it as a sensitive header.
+- A bad API key fails at `build()` with `BuildError::InvalidAuthCredential`. Before, it caused a panic in `invoke()`.
+
 ### Upgrade notes
 
+- **Breaking:** an HTTP 401 or 403 now gives `ModelError::Rejected`, not `Refused`. Code that matches `Refused` for an auth failure must match `Rejected { status: 401 | 403, .. }`.
+- **Breaking:** an HTTP 400, 404 or 413 now gives `Rejected`, not `Other`. An HTTP 429 with `billing_error` now gives `RateLimited` with the `retry-after` value, not `Other`.
+- An HTTP 402, 409 or 422 with an auth error type (`authentication_error` or `permission_error`) now gives `ModelError::Other` (before: `Refused`).
+- **Breaking:** `BuildError` has the three new variants above. A `match` on `BuildError` must handle them.
+- **Breaking:** the new default feature `rustls-aws-lc` selects the TLS backend. With `default-features = false`, the crate selects no TLS backend. Enable `rustls-aws-lc` or `rustls-no-provider`.
 - `claude-fable-5-2`, `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5-5` and `claude-sonnet-5` now report streaming, tools, parallel tool calls, structured output, vision, reasoning and prompt caching. Their default `max_tokens` goes from 4096 to 32768. To keep a lower limit, set `max_output_tokens` per request.
 - `claude-haiku-4-5` now reports reasoning.
 - Claude Opus 4.1 is retired. A `claude-opus-4-1` id now reports the conservative capability set, with a default `max_tokens` of 4096.
+- Requires `paigasus-helikon-core` 0.8.4.
 
 ## [0.3.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.5...paigasus-helikon-providers-anthropic-v0.3.6) - 2026-11-26
 

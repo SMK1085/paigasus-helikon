@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.3...paigasus-helikon-core-v0.8.4) - 2026-11-27
+
+### Added
+
+- *(core)* SMA-868 add `ModelError::Rejected { status, error_type, message }` for a non-retryable http 4xx. `RetryingModel` does not retry it.
+
 ## [0.8.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.2...paigasus-helikon-core-v0.8.3) - 2026-11-22
 
 ### Fixed
