@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "11f0419d0232",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-864-the-agent-loop-runs-a-tool-call-from-a-turn",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-anthropic/src/stream.rs",
+    "crates/paigasus-helikon-providers-bedrock/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-bedrock/src/stream.rs",
+    "crates/paigasus-helikon-providers-gemini/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-gemini/src/stream.rs",
+    "crates/paigasus-helikon-providers-litellm/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unknown_finish_reason.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/streaming.rs",
+    "docs/superpowers/specs/2026-11-26-sma-864-no-tool-calls-after-length-design.md",
+    "tests/provider-stream-conformance/tests/conformance.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/11/f0419d0232/0/metadata.json",
+      "transcript": "/11/f0419d0232/0/full.jsonl",
+      "compact_transcript": "/11/f0419d0232/0/transcript.jsonl",
+      "content_hash": "/11/f0419d0232/0/content_hash.txt",
+      "prompt": "/11/f0419d0232/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 10221,
+    "cache_read_tokens": 991180,
+    "output_tokens": 4634,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 76,
+      "cache_creation_tokens": 211700,
+      "cache_read_tokens": 3756797,
+      "output_tokens": 23487,
+      "api_call_count": 37
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 55,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 55,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

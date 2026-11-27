@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UaFHNqrZo2RnoxtvjNLReJ",
+  "agent_id": "aae0621fb1c20374d",
+  "subagent_type": "general-purpose",
+  "task_description": "Review Task 5 (docs)",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 67914,
+    "cache_read_tokens": 334918,
+    "output_tokens": 2507,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-27T23:12:12.251969+01:00",
+  "completed_at": "2026-11-27T23:12:33.724314+01:00"
+}
