@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- `claude-fable-5-2`, `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5-5` and `claude-sonnet-5` now report streaming, tools, parallel tool calls, structured output, vision, reasoning and prompt caching. Their default `max_tokens` goes from 4096 to 32768. To keep a lower limit, set `max_output_tokens` per request.
+- `claude-haiku-4-5` now reports reasoning.
+- Claude Opus 4.1 is retired. A `claude-opus-4-1` id now reports the conservative capability set, with a default `max_tokens` of 4096.
+
 ## [0.3.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.5...paigasus-helikon-providers-anthropic-v0.3.6) - 2026-11-26
 
 ### Fixed

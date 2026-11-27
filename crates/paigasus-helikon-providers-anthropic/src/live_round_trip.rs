@@ -4,9 +4,8 @@
 //! Optional: `ANTHROPIC_LIVE_MODEL_ID` (default `claude-sonnet-5-5`, used with
 //! `ExtendedThinking::Adaptive`). Optional: `ANTHROPIC_LIVE_ENABLED_MODEL_ID`
 //! (default `claude-haiku-4-5`, used with `ExtendedThinking::Enabled`).
-//! Optional: `ANTHROPIC_LIVE_INTERLEAVED_MODEL_ID` (default `claude-opus-4-5`,
-//! used with `ExtendedThinking::Enabled` and the interleaved beta; Haiku 4.5
-//! ignores this beta).
+//! Optional: `ANTHROPIC_LIVE_INTERLEAVED_MODEL_ID` (default `claude-haiku-4-5`,
+//! used with `ExtendedThinking::Enabled` and the interleaved beta).
 //!
 //! Claude Sonnet 5.5 returns thinking blocks with empty text. No test here
 //! needs a non-empty thinking text.
@@ -62,7 +61,7 @@ fn enabled_model_id() -> String {
 
 fn interleaved_model_id() -> String {
     std::env::var("ANTHROPIC_LIVE_INTERLEAVED_MODEL_ID")
-        .unwrap_or_else(|_| "claude-opus-4-5".into())
+        .unwrap_or_else(|_| "claude-haiku-4-5".into())
 }
 
 /// The default model with adaptive thinking and the effort `max`. In a probe,
@@ -80,8 +79,8 @@ fn make_model(beta: Option<&str>) -> AnthropicModel {
 
 /// A model from before 4.6 with enabled thinking. The redacted test runs here,
 /// because on `claude-sonnet-5-5` the trigger string gives a normal thinking
-/// block. The default model is Haiku 4.5. Haiku 4.5 ignores the interleaved
-/// beta, so the interleaved test passes its own model.
+/// block. The default model is Haiku 4.5. The interleaved test reads its own
+/// model id, so a run can test interleaving on another model.
 fn make_enabled_model(model_id: String, beta: Option<&str>) -> AnthropicModel {
     let mut builder =
         AnthropicModel::messages(model_id).extended_thinking(ExtendedThinking::Enabled {

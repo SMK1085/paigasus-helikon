@@ -30,6 +30,118 @@ pub(crate) const fn conservative_defaults() -> ModelEntry {
 pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
     // Claude 4 and 5 families.
     (
+        "claude-fable-5-2",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-fable-5-1",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-fable-5",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-opus-5-5",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-opus-5",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-opus-4-8",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-sonnet-5-5",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
+        "claude-sonnet-5",
+        ModelEntry {
+            caps: ModelCapabilities::empty()
+                .with_streaming()
+                .with_tools()
+                .with_parallel_tool_calls()
+                .with_structured_output()
+                .with_vision()
+                .with_reasoning()
+                .with_prompt_caching(),
+            max_output_default: 32_768,
+        },
+    ),
+    (
         "claude-opus-4-7",
         ModelEntry {
             caps: ModelCapabilities::empty()
@@ -59,20 +171,6 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
     ),
     (
         "claude-opus-4-5",
-        ModelEntry {
-            caps: ModelCapabilities::empty()
-                .with_streaming()
-                .with_tools()
-                .with_parallel_tool_calls()
-                .with_structured_output()
-                .with_vision()
-                .with_reasoning()
-                .with_prompt_caching(),
-            max_output_default: 32_768,
-        },
-    ),
-    (
-        "claude-opus-4-1",
         ModelEntry {
             caps: ModelCapabilities::empty()
                 .with_streaming()
@@ -136,6 +234,7 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
                 .with_parallel_tool_calls()
                 .with_structured_output()
                 .with_vision()
+                .with_reasoning()
                 .with_prompt_caching(),
             max_output_default: 8192,
         },
@@ -185,6 +284,47 @@ mod tests {
         assert!(e.caps.reasoning);
         assert!(e.caps.prompt_caching);
         assert_eq!(e.max_output_default, 32_768);
+    }
+
+    /// Every current Claude 5 id, and Opus 4.8, reports the full set. The
+    /// Models API lists vision, structured outputs and thinking for each.
+    #[test]
+    fn current_claude_5_rows_report_the_full_set() {
+        for id in [
+            "claude-fable-5-2",
+            "claude-fable-5-1",
+            "claude-fable-5",
+            "claude-opus-5-5",
+            "claude-opus-5",
+            "claude-opus-4-8",
+            "claude-sonnet-5-5",
+            "claude-sonnet-5",
+        ] {
+            let e = lookup(id);
+            assert!(e.caps.streaming, "{id}");
+            assert!(e.caps.tools, "{id}");
+            assert!(e.caps.parallel_tool_calls, "{id}");
+            assert!(e.caps.structured_output, "{id}");
+            assert!(e.caps.vision, "{id}");
+            assert!(e.caps.reasoning, "{id}");
+            assert!(e.caps.prompt_caching, "{id}");
+            assert_eq!(e.max_output_default, 32_768, "{id}");
+        }
+    }
+
+    /// Haiku 4.5 accepts `ExtendedThinking::Enabled`, so it reports reasoning.
+    #[test]
+    fn haiku_4_5_reports_reasoning() {
+        let e = lookup("claude-haiku-4-5");
+        assert!(e.caps.reasoning);
+        assert_eq!(e.max_output_default, 8192);
+    }
+
+    /// Claude Opus 4.1 is retired. Its id gets the conservative set.
+    #[test]
+    fn retired_opus_4_1_has_no_row() {
+        assert!(KNOWN_MODELS.iter().all(|(id, _)| *id != "claude-opus-4-1"));
+        assert_eq!(lookup("claude-opus-4-1").max_output_default, 4096);
     }
 
     #[test]
