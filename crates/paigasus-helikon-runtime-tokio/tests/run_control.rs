@@ -194,3 +194,104 @@ async fn terminal_then_late_cancel_reports_completed() {
     assert!(res.is_ok(), "terminal must win over a late cancel: {res:?}");
     assert_eq!(res.unwrap().final_output, "hi");
 }
+
+/// A model like a real provider: it streams some events, waits, and ends its
+/// stream with no `Finish` when the token fires.
+struct EndsOnCancel {
+    events: Vec<paigasus_helikon_core::ModelEvent>,
+}
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::Model for EndsOnCancel {
+    async fn invoke(
+        &self,
+        _request: paigasus_helikon_core::ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<
+        futures_core::stream::BoxStream<
+            'static,
+            Result<paigasus_helikon_core::ModelEvent, paigasus_helikon_core::ModelError>,
+        >,
+        paigasus_helikon_core::ModelError,
+    > {
+        let events = self.events.clone();
+        Ok(Box::pin(async_stream::stream! {
+            for ev in events {
+                yield Ok(ev);
+            }
+            cancel.cancelled().await;
+        }))
+    }
+
+    fn capabilities(&self) -> paigasus_helikon_core::ModelCapabilities {
+        paigasus_helikon_core::ModelCapabilities::default()
+    }
+}
+
+/// A tool that counts its calls.
+struct CountingTool(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::Tool<()> for CountingTool {
+    fn name(&self) -> &str {
+        "search"
+    }
+    fn description(&self) -> &str {
+        "counting tool"
+    }
+    fn schema(&self) -> &serde_json::Value {
+        static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| serde_json::json!({"type": "object"}))
+    }
+    async fn invoke(
+        &self,
+        _ctx: &paigasus_helikon_core::ToolContext<()>,
+        _args: serde_json::Value,
+    ) -> Result<paigasus_helikon_core::ToolOutput, paigasus_helikon_core::ToolError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(paigasus_helikon_core::ToolOutput::new(
+            serde_json::json!({}),
+        ))
+    }
+}
+
+async fn cancel_after_20ms(
+    events: Vec<paigasus_helikon_core::ModelEvent>,
+) -> (Result<paigasus_helikon_core::RunResult, RunError>, usize) {
+    let tool = std::sync::Arc::new(CountingTool(Default::default()));
+    let cancel = CancellationToken::new();
+    let ctx = run_context_with_cancel(cancel.clone());
+    let agent = text_agent(
+        std::sync::Arc::new(EndsOnCancel { events }),
+        vec![tool.clone() as std::sync::Arc<dyn paigasus_helikon_core::Tool<()>>],
+    );
+    let res = tokio::time::timeout(Duration::from_secs(5), async {
+        let run_fut = TokioRunner.run(
+            &agent,
+            ctx,
+            AgentInput::from_user_text("go"),
+            RunConfig::default(),
+        );
+        let canceller = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            cancel.cancel();
+        };
+        let (r, _) = tokio::join!(run_fut, canceller);
+        r
+    })
+    .await
+    .expect("run must end within 5s of cancel");
+    (res, tool.0.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_during_a_tool_call_stream_is_cancelled() {
+    let (res, calls) = cancel_after_20ms(vec![paigasus_helikon_core::ModelEvent::ToolCallDelta {
+        call_id: "c1".into(),
+        name: Some("search".into()),
+        args_delta: "{}".into(),
+    }])
+    .await;
+    assert!(matches!(res, Err(RunError::Cancelled)), "got {res:?}");
+    assert_eq!(calls, 0, "no tool may run");
+}

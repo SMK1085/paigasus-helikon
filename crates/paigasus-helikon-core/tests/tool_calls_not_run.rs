@@ -218,6 +218,6 @@ async fn cancel_during_a_tool_call_stream_is_not_a_failure() {
         }
     }
     assert!(tool.invocations().is_empty());
-    // The runner turns a stream that ends with no terminal event into `Cancelled`.
+    // The driver ends the stream with no terminal event; the runner then reports the cancel.
     assert!(terminal.is_none(), "got {terminal:?}");
 }

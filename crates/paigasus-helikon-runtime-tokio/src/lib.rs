@@ -37,7 +37,8 @@ impl InterruptHandle {
 /// stream cancels nested in-flight awaits within one poll). The interrupt, if
 /// any, is committed *before* the terminating `None`, so a caller reading the
 /// handle after draining never sees a stale value. A run that ends naturally
-/// commits nothing and the handle stays `None`.
+/// commits nothing and the handle stays `None`. A stream that ends
+/// after the token fired commits `Cancelled`.
 fn controlled(
     mut stream: BoxStream<'static, AgentEvent>,
     cancel: CancellationToken,
@@ -59,7 +60,16 @@ fn controlled(
                 maybe_ev = stream.next() => {
                     match maybe_ev {
                         Some(ev) => yield ev,
-                        None => break, // inner stream done => no interrupt
+                        None => {
+                            // The agent stream ended. If the token fired, the
+                            // agent ended early because of the cancel (a model
+                            // must not emit `Finish` on cancel), so record it.
+                            // A real terminal event still wins in `run`.
+                            if cancel.is_cancelled() {
+                                *cell.lock().unwrap() = Some(RunInterrupt::Cancelled);
+                            }
+                            break;
+                        }
                     }
                 }
                 () = cancel.cancelled() => {

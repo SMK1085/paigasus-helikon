@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A run now ends with `RunError::Cancelled` when the agent stream ends after the cancel token fired and no terminal event arrived. Before, the run returned `Ok`.
+
 ## [0.3.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.3.2...paigasus-helikon-runtime-tokio-v0.3.3) - 2026-11-22
 
 ### Other
