@@ -243,6 +243,63 @@ For each other wire value, the builder checks the vendor reference and records
 the call in a table in this section (value, provider, old mapping, new mapping,
 source). A value that is not clearly a cut or a filter stays as it is.
 
+#### Sweep result (Task 6, 2026-11-27)
+
+Sources (read 2026-11-27):
+
+- [A] Anthropic, "Handling stop reasons":
+  <https://platform.claude.com/docs/en/api/handling-stop-reasons>
+- [B] AWS, `MessageStopEvent` (Converse stream):
+  <https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_MessageStopEvent.html>,
+  and `aws-sdk-bedrockruntime` 1.158.0 `types/_stop_reason.rs`
+- [G] Google, Gemini API `FinishReason`:
+  <https://ai.google.dev/api/generate-content#FinishReason> (redirects to
+  <https://aistudio.google.com/api-reference/generate-content>)
+- [OC] `async-openai` 0.43.0 `types/chat/chat_.rs:1185` (`FinishReason`,
+  a closed enum). The OpenAI Chat web reference was not read.
+- [OR] OpenAI, Responses object:
+  <https://developers.openai.com/api/reference/resources/responses>
+- [L] LiteLLM `_FINISH_REASON_MAP` and `map_finish_reason`:
+  <https://github.com/BerriAI/litellm/blob/main/litellm/litellm_core_utils/core_helpers.py>
+
+| Value | Provider | Old | New | Source and reason |
+| --- | --- | --- | --- | --- |
+| `end_turn`, `stop_sequence` | Anthropic | `Stop` | `Stop` | [A]. Natural end. |
+| `max_tokens` | Anthropic | `Length` | `Length` | [A]. |
+| `tool_use` | Anthropic | `ToolCalls` (`Stop` for the synthesized output tool) | no change | [A]. |
+| `model_context_window_exceeded` | Anthropic | `Other` | `Length` | [A]: "reached the model's context window limit", "treat the response as truncated". Decided in the brief. |
+| `pause_turn` | Anthropic | `Other` | `Other` | [A]: the server-tool loop reached its iteration limit. [A] says it is never returned for client tools, so no client tool call is cut. Not clearly a cut. |
+| `refusal` | Anthropic | `Err(Refused)` | no change | [A]. Already an error, not a `Finish`. |
+| `end_turn`, `stop_sequence` | Bedrock | `Stop` | `Stop` | [B]. |
+| `tool_use` | Bedrock | `ToolCalls` | no change | [B]. |
+| `max_tokens` | Bedrock | `Length` | `Length` | [B]. |
+| `guardrail_intervened`, `content_filtered` | Bedrock | `ContentFilter` | `ContentFilter` | [B]. |
+| `model_context_window_exceeded` | Bedrock | `Other` | `Length` | [B] lists the value with no description; [A] defines it for the same Claude models. Decided in the brief. |
+| `malformed_model_output`, `malformed_tool_use` | Bedrock | `Other` | `Other` | [B] gives no description. A malformed output is not a cut and not a filter. |
+| `STOP` | Gemini | `Stop` / `ToolCalls` | no change | [G]. |
+| `MAX_TOKENS` | Gemini | `Length` | `Length` | [G]. |
+| `CONTINUATION` | Gemini | `Other` | `Length` | [G]: "stopped because the response reached the per-request token limit, but generation is not yet complete". |
+| `SAFETY`, `RECITATION`, `PROHIBITED_CONTENT`, `BLOCKLIST`, `SPII` | Gemini | `ContentFilter` | `ContentFilter` | [G]. |
+| `IMAGE_SAFETY` | Gemini | `Other` | `ContentFilter` | [G]: "generated images contain safety violations". |
+| `IMAGE_PROHIBITED_CONTENT` | Gemini | `Other` | `ContentFilter` | [G]: image counterpart of `PROHIBITED_CONTENT`. |
+| `IMAGE_RECITATION` | Gemini | `Other` | `ContentFilter` | [G]: "Image generation stopped due to recitation". `RECITATION` already maps to `ContentFilter`. |
+| `ESCALATION` | Gemini | `Other` | `ContentFilter` | [G]: "Request was filtered by an escalation rule". |
+| `LANGUAGE` | Gemini | `Other` | `Other` | [G]: "flagged for using an unsupported language". A language check, not clearly a safety filter. Doubtful; kept. |
+| `PUP_LIMITED_DISABLED` | Gemini | `Other` | `Other` | [G]: the account is limited or disabled for policy violations. An account state, not a filter of this output. Doubtful; kept. |
+| `OTHER`, `FINISH_REASON_UNSPECIFIED`, `IMAGE_OTHER`, `NO_IMAGE` | Gemini | `Other` | `Other` | [G]: unknown or no image. Not clear. |
+| `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, `TOO_MANY_TOOL_CALLS`, `MISSING_THOUGHT_SIGNATURE`, `MALFORMED_RESPONSE` | Gemini | `Other` | `Other` | [G]: tool or format errors. Not a cut and not a filter. |
+| `stop`, `length`, `tool_calls`, `content_filter` | OpenAI Chat | `Stop`, `Length`, `ToolCalls`, `ContentFilter` | no change | [OC]. |
+| `function_call` | OpenAI Chat | `Other("function_call")` | no change | [OC]. Kept on purpose: the deny-list must not block a valid tool call. |
+| `max_output_tokens` | OpenAI Responses | `Length` | `Length` | [OR]. |
+| `content_filter` | OpenAI Responses | `ContentFilter` | `ContentFilter` | [OR]. |
+| `max_messages` | OpenAI Responses | `Other` | `Other` | [OR] lists the value with no definition. Not clear. |
+| `steered` | OpenAI Responses | `Other` | `Other` | [OR]: the response stops at a safe output boundary after a client steer event. Not a cut by a limit. |
+| status `failed`, `cancelled`, `queued`, `in_progress` | OpenAI Responses | `Other` | `Other` | No `incomplete_details.reason`. Not clear. Status `incomplete` with no reason stays `Length`. |
+| `stop`, `length`, `content_filter` | LiteLLM | `Stop`, `Length`, `ContentFilter` | no change | [L]. |
+| `tool_calls`, `function_call` | LiteLLM | `ToolCalls` | no change | [L]. |
+| `guardrail_intervened` | LiteLLM | `Other` | `ContentFilter` | [L] maps it to `content_filter`; accept the raw value too. Decided in the brief. |
+| any other value | LiteLLM | `Other` | `Other` | [L]: the proxy maps every vendor value to the five OpenAI values and maps an unknown value to `stop`. |
+
 This changes a public value (`ModelTurn::finish_reason`) for those stop
 reasons. Each touched provider crate gets an upgrade note in its CHANGELOG.
 

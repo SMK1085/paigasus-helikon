@@ -101,10 +101,19 @@ impl StreamTranslator {
         let fr = match reason.as_str() {
             "STOP" if self.saw_function_call => FinishReason::ToolCalls,
             "STOP" => FinishReason::Stop,
-            "MAX_TOKENS" => FinishReason::Length,
-            "SAFETY" | "RECITATION" | "PROHIBITED_CONTENT" | "BLOCKLIST" | "SPII" => {
-                FinishReason::ContentFilter
-            }
+            // `CONTINUATION`: the per-request token limit cut the output
+            // (SMA-864).
+            "MAX_TOKENS" | "CONTINUATION" => FinishReason::Length,
+            // The image and escalation values are filters too (SMA-864).
+            "SAFETY"
+            | "RECITATION"
+            | "PROHIBITED_CONTENT"
+            | "BLOCKLIST"
+            | "SPII"
+            | "IMAGE_SAFETY"
+            | "IMAGE_PROHIBITED_CONTENT"
+            | "IMAGE_RECITATION"
+            | "ESCALATION" => FinishReason::ContentFilter,
             other => FinishReason::Other(other.to_owned()),
         };
         vec![Ok(ModelEvent::Finish { reason: fr })]
@@ -246,6 +255,46 @@ mod tests {
                 reason: FinishReason::ContentFilter
             })
         ));
+    }
+
+    /// SMA-864 sweep: every Gemini `FinishReason` that the API reference
+    /// documents as a cut or a filter maps to `Length` or `ContentFilter`.
+    /// The other values stay in `Other`.
+    #[test]
+    fn finish_reason_sweep_maps_cut_and_filtered_values() {
+        for (raw, expected) in [
+            ("MAX_TOKENS", FinishReason::Length),
+            ("CONTINUATION", FinishReason::Length),
+            ("SAFETY", FinishReason::ContentFilter),
+            ("RECITATION", FinishReason::ContentFilter),
+            ("PROHIBITED_CONTENT", FinishReason::ContentFilter),
+            ("BLOCKLIST", FinishReason::ContentFilter),
+            ("SPII", FinishReason::ContentFilter),
+            ("IMAGE_SAFETY", FinishReason::ContentFilter),
+            ("IMAGE_PROHIBITED_CONTENT", FinishReason::ContentFilter),
+            ("IMAGE_RECITATION", FinishReason::ContentFilter),
+            ("ESCALATION", FinishReason::ContentFilter),
+            ("LANGUAGE", FinishReason::Other("LANGUAGE".to_owned())),
+            ("OTHER", FinishReason::Other("OTHER".to_owned())),
+            (
+                "MALFORMED_FUNCTION_CALL",
+                FinishReason::Other("MALFORMED_FUNCTION_CALL".to_owned()),
+            ),
+            (
+                "PUP_LIMITED_DISABLED",
+                FinishReason::Other("PUP_LIMITED_DISABLED".to_owned()),
+            ),
+        ] {
+            let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+            let _ = t.consume(chunk(
+                serde_json::json!({ "candidates": [ { "finishReason": raw } ] }),
+            ));
+            let fin = t.finish();
+            assert!(
+                matches!(&fin[0], Ok(ModelEvent::Finish { reason }) if *reason == expected),
+                "{raw}: expected {expected:?}, got {fin:?}"
+            );
+        }
     }
 
     fn data_of(ev: &Result<ModelEvent, ModelError>) -> (&Option<String>, &serde_json::Value) {

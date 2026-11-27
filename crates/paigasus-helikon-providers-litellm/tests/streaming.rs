@@ -160,7 +160,7 @@ async fn unknown_finish_reason_lands_in_other() {
     let evs = events_for(include_str!("fixtures/unknown_finish_reason.txt")).await;
     match evs.last().unwrap() {
         ModelEvent::Finish { reason } => {
-            assert_eq!(*reason, FinishReason::Other("guardrail_intervened".into()));
+            assert_eq!(*reason, FinishReason::Other("some_future_reason".into()));
         }
         other => panic!("expected Finish, got {other:?}"),
     }

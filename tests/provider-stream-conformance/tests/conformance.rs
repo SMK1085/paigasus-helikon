@@ -1506,7 +1506,7 @@ mod openai_chat {
 ///
 /// `unknown_finish_reason.txt` (HAND-AUTHORED) was read but contributes no
 /// shape this module needs: this subject serves only `Stop` and `ToolCalls`
-/// finish reasons, and the `"guardrail_intervened"` value it carries is a
+/// finish reasons, and the `"some_future_reason"` value it carries is a
 /// second encoding of the already-covered populated-`finish_reason`
 /// envelope. `unparseable_frame.txt` (HAND-AUTHORED) is not cited here.
 ///
