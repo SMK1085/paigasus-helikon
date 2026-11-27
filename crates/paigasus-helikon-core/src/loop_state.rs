@@ -284,6 +284,44 @@ pub fn transition(
                 }
             }
         }
+        // A turn cut by the token limit or the content filter must not run
+        // its tool calls: the arguments may be truncated. The turn is one
+        // unit, so a handoff call is held back too. Fail the run instead.
+        (
+            LoopState::CallingModel { .. },
+            TransitionInput::ModelResponse {
+                items,
+                finish_reason: reason @ (FinishReason::Length | FinishReason::ContentFilter),
+                ..
+            },
+        ) if items.iter().any(|i| matches!(i, Item::ToolCall { .. })) => {
+            let tool_names: Vec<String> = items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::ToolCall { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+            let err = AgentError::ToolCallsNotRun {
+                finish_reason: Some(reason),
+                tool_names,
+            };
+            let mut events: Vec<AgentEvent> = items
+                .iter()
+                .filter(|i| matches!(i, Item::AssistantMessage { .. }))
+                .cloned()
+                .map(|item| AgentEvent::MessageOutput { item })
+                .collect();
+            events.push(AgentEvent::RunFailed {
+                error: err.to_string(),
+            });
+            TransitionOutcome {
+                next_state: LoopState::Failed(err),
+                events,
+                next_action: NextAction::Terminate,
+                conversation_appends: Vec::new(),
+            }
+        }
         // Model produced tool calls → fan out to ExecutingTools.
         (
             LoopState::CallingModel { turn, usage: prior },

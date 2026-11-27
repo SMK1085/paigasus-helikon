@@ -2,9 +2,9 @@
 //! no IO. Locks SMA-314's state-machine determinism guarantees.
 
 use paigasus_helikon_core::{
-    transition, AgentEvent, ContentPart, FinishReason, Item, LoopState, ModelSettings, NextAction,
-    OutputType, PendingToolCall, ResponseFormat, TokenUsage, ToolCallOutcome, ToolCallRequest,
-    TransitionCtx, TransitionInput,
+    transition, AgentError, AgentEvent, ContentPart, FinishReason, HandoffDef, Item, LoopState,
+    ModelSettings, NextAction, OutputType, PendingToolCall, ResponseFormat, TokenUsage,
+    ToolCallOutcome, ToolCallRequest, TransitionCtx, TransitionInput,
 };
 
 /// Minimal schema struct for structured-output tests.
@@ -820,4 +820,156 @@ fn model_response_prefers_handoff_over_regular_tool_call() {
         }
         other => panic!("expected ApplyingHandoff, got {other:?}"),
     }
+}
+
+// --- SMA-864: a cut or filtered turn must not run its tool calls. ---
+
+fn cut_turn_text() -> Item {
+    Item::AssistantMessage {
+        content: vec![ContentPart::Text {
+            text: "partial".into(),
+        }],
+        agent: Some("test".into()),
+    }
+}
+
+fn call_item(call_id: &str, name: &str) -> Item {
+    Item::ToolCall {
+        call_id: call_id.into(),
+        name: name.into(),
+        args: serde_json::json!({}),
+    }
+}
+
+fn respond(
+    items: Vec<Item>,
+    finish_reason: FinishReason,
+    handoffs: &[HandoffDef],
+) -> paigasus_helikon_core::TransitionOutcome {
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let ctx = TransitionCtx {
+        tools: &[],
+        model_settings: &settings,
+        max_turns: 16,
+        conversation: &conversation,
+        output: None,
+        handoffs,
+    };
+    let input = TransitionInput::ModelResponse {
+        items,
+        usage: TokenUsage::default(),
+        finish_reason,
+    };
+    transition(&state, input, &ctx)
+}
+
+fn assert_not_run(
+    outcome: &paigasus_helikon_core::TransitionOutcome,
+    reason: FinishReason,
+    names: &[&str],
+) {
+    match &outcome.next_state {
+        LoopState::Failed(AgentError::ToolCallsNotRun {
+            finish_reason,
+            tool_names,
+            ..
+        }) => {
+            assert_eq!(finish_reason.as_ref(), Some(&reason));
+            assert_eq!(tool_names, names);
+        }
+        other => panic!("expected Failed(ToolCallsNotRun), got {other:?}"),
+    }
+    assert_matches!(&outcome.next_action, NextAction::Terminate);
+    assert!(outcome.conversation_appends.is_empty());
+    assert_matches!(outcome.events.last().unwrap(), AgentEvent::RunFailed { .. });
+    assert!(!outcome
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::ToolCallItem { .. })));
+}
+
+#[test]
+fn length_with_one_tool_call_fails_without_running_it() {
+    let outcome = respond(
+        vec![cut_turn_text(), call_item("1", "search")],
+        FinishReason::Length,
+        &[],
+    );
+    assert_not_run(&outcome, FinishReason::Length, &["search"]);
+}
+
+#[test]
+fn content_filter_with_one_tool_call_fails_without_running_it() {
+    let outcome = respond(
+        vec![call_item("1", "search")],
+        FinishReason::ContentFilter,
+        &[],
+    );
+    assert_not_run(&outcome, FinishReason::ContentFilter, &["search"]);
+}
+
+#[test]
+fn length_with_three_tool_calls_runs_none() {
+    let outcome = respond(
+        vec![
+            call_item("a", "x"),
+            call_item("b", "y"),
+            call_item("c", "z"),
+        ],
+        FinishReason::Length,
+        &[],
+    );
+    assert_not_run(&outcome, FinishReason::Length, &["x", "y", "z"]);
+}
+
+#[test]
+fn length_with_text_and_handoff_fails_without_handoff() {
+    let defs = vec![HandoffDef {
+        tool_name: "transfer_to_budgeting_specialist".to_owned(),
+        target: "budgeting specialist".to_owned(),
+        description: "Handles budgeting.".to_owned(),
+    }];
+    let outcome = respond(
+        vec![
+            cut_turn_text(),
+            call_item("c1", "transfer_to_budgeting_specialist"),
+        ],
+        FinishReason::Length,
+        &defs,
+    );
+    assert_not_run(
+        &outcome,
+        FinishReason::Length,
+        &["transfer_to_budgeting_specialist"],
+    );
+    assert_eq!(outcome.events.len(), 2);
+    assert_matches!(&outcome.events[0], AgentEvent::MessageOutput { .. });
+    assert_matches!(&outcome.events[1], AgentEvent::RunFailed { .. });
+}
+
+#[test]
+fn length_without_tool_calls_still_completes() {
+    let outcome = respond(vec![cut_turn_text()], FinishReason::Length, &[]);
+    assert_matches!(outcome.next_state, LoopState::Done(_));
+}
+
+#[test]
+fn stop_with_tool_call_still_executes() {
+    let outcome = respond(vec![call_item("1", "search")], FinishReason::Stop, &[]);
+    assert_matches!(outcome.next_state, LoopState::ExecutingTools { .. });
+}
+
+#[test]
+fn other_function_call_with_tool_call_still_executes() {
+    let outcome = respond(
+        vec![call_item("1", "search")],
+        FinishReason::Other("function_call".into()),
+        &[],
+    );
+    assert_matches!(outcome.next_state, LoopState::ExecutingTools { .. });
 }
