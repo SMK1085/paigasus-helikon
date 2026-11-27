@@ -801,8 +801,9 @@ impl ModelTurnAccumulator {
     }
 
     /// Reassemble. `Err(String)` = invalid JSON in accumulated tool-call
-    /// args, a stream with tool calls and no `Finish` event, **or** an ambiguous blank-id bucket (two or more name-carrying
-    /// deltas under `""`), which is checked first, before any parse.
+    /// args, a stream with tool calls and no `Finish` event, **or** an
+    /// ambiguous blank-id bucket (two or more name-carrying deltas under
+    /// `""`), which is checked first, before any parse.
     pub fn finish(self) -> Result<ModelTurn, String> {
         if self.blank_names.len() >= 2 {
             let count = self.blank_names.len();
@@ -818,11 +819,7 @@ impl ModelTurnAccumulator {
             ));
         }
         if !self.finish_seen && !self.tool_accum.is_empty() {
-            let names = self
-                .tool_accum
-                .values()
-                .map(|accum| accum.name.clone().unwrap_or_default())
-                .collect::<Vec<_>>();
+            let names = self.tool_call_names();
             let list = cap_names(&names);
             tracing::warn!(
                 target: "paigasus::core::model",

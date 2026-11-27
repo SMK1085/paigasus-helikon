@@ -128,6 +128,12 @@ async fn cut_call_is_not_recorded_in_the_session() {
     }
     session.append(&recorder.drain()).await.unwrap();
     let log = session.events(None).await.unwrap();
+    // Guard against a vacuous pass: the log must hold the user message.
+    assert!(
+        log.iter()
+            .any(|e| matches!(e, SessionEvent::UserMessage { .. })),
+        "{log:?}"
+    );
     assert!(
         !log.iter().any(|e| matches!(
             e,

@@ -192,6 +192,14 @@ where
             other => ToolError::Other(anyhow::Error::from(other)),
         })?;
 
+        // A cancelled sub-run can end its stream with no terminal event. Do not
+        // give the parent an empty string as if it were a real answer.
+        if ctx.cancel().is_cancelled() && !result.events.iter().any(|e| e.is_terminal()) {
+            return Err(ToolError::Other(anyhow::anyhow!(
+                "sub-agent run was cancelled"
+            )));
+        }
+
         Ok(ToolOutput::new(Value::String(result.final_output)))
     }
 }
