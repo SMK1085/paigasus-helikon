@@ -195,6 +195,8 @@ jobs:
       # the anthropic provider with `rustls-no-provider`. Build and test that
       # combination; every other job builds the provider with --all-features only.
       - run: cargo build -p paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider
+      # Both TLS features off must still build; build() then needs http_client.
+      - run: cargo build -p paigasus-helikon-providers-anthropic --no-default-features
       - run: cargo test -p paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider
       - name: Assert no rustls crypto provider under rustls-no-provider
         run: |
