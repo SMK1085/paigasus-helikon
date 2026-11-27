@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "5bcb79d216c8",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-864-the-agent-loop-runs-a-tool-call-from-a-turn",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "crates/paigasus-helikon-core/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-temporal/CHANGELOG.md",
+    "docs/book/src/concepts/agent-loop.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5b/cb79d216c8/0/metadata.json",
+      "transcript": "/5b/cb79d216c8/0/full.jsonl",
+      "compact_transcript": "/5b/cb79d216c8/0/transcript.jsonl",
+      "content_hash": "/5b/cb79d216c8/0/content_hash.txt",
+      "prompt": "/5b/cb79d216c8/0/prompt.txt"
+    }
+  ],
+  "redaction": {
+    "replacements": 115,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 115,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
