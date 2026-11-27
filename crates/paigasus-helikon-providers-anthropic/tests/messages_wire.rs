@@ -231,7 +231,8 @@ async fn http_4xx_statuses_map_to_rejected() {
 
 #[tokio::test]
 async fn http_401_html_body_maps_to_rejected_with_empty_error_type() {
-    // A proxy page, not the Anthropic envelope. No JSON, so no `error.type`.
+    // HAND-AUTHORED, not captured. Shape: a generic proxy HTML error page, which carries no Anthropic error envelope.
+    // The body is not JSON, so there is no `error.type`.
     let item = first_item(
         ResponseTemplate::new(401)
             .insert_header("content-type", "text/html")
@@ -254,6 +255,7 @@ async fn http_401_html_body_maps_to_rejected_with_empty_error_type() {
 
 #[tokio::test]
 async fn http_403_empty_body_maps_to_rejected_with_empty_error_type() {
+    // HAND-AUTHORED, not captured. Shape: an empty HTTP error body, which carries no Anthropic error envelope.
     let item = first_item(ResponseTemplate::new(403)).await;
     match item {
         Err(ModelError::Rejected {
