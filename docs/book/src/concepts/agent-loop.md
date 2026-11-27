@@ -48,6 +48,8 @@ pub struct TransitionOutcome {
 
 A typical run walks `CallingModel → ExecutingTools → CallingModel → … → Done`. Each tool round bumps `turn`; reaching `RunConfig::max_turns` fails the run with `AgentError::MaxTurnsExceeded`. With an `output_type` configured, the loop adds a `Finalizing` (and, on a validation miss, one `RepairingOutput`) turn before `Done`. See [Structured Output](./structured-output-builder.md) for that path.
 
+A model turn can end with `FinishReason::Length` or `FinishReason::ContentFilter` and still hold tool calls. The provider cut that turn, so the tool call arguments can be incomplete. The loop fails the run with `AgentError::ToolCallsNotRun`. No tool call and no handoff from that turn runs.
+
 ## The event stream
 
 `Agent::run` returns a `BoxStream<'static, AgentEvent>`. The outer `Result` only covers failure to *start* the stream; a fatal error mid-run arrives as an `AgentEvent::RunFailed` inside the stream, not as an `Err`.
