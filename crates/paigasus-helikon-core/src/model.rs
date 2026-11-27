@@ -773,6 +773,23 @@ impl ModelTurnAccumulator {
         }
     }
 
+    /// The reason of the last `Finish` event seen so far.
+    ///
+    /// Gives [`FinishReason::Stop`] when no `Finish` event has arrived.
+    pub fn finish_reason(&self) -> &FinishReason {
+        &self.finish_reason
+    }
+
+    /// The names of the accumulated tool calls, in `call_id` order.
+    ///
+    /// A call that carries no name gives an empty string.
+    pub fn tool_call_names(&self) -> Vec<String> {
+        self.tool_accum
+            .values()
+            .map(|accum| accum.name.clone().unwrap_or_default())
+            .collect()
+    }
+
     /// Reassemble. `Err(String)` = invalid JSON in accumulated tool-call
     /// args, **or** an ambiguous blank-id bucket (two or more name-carrying
     /// deltas under `""`), which is checked first, before any parse.

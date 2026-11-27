@@ -1502,13 +1502,32 @@ where
                             }
                         }
 
+                        // Read these before `finish()` consumes the accumulator.
+                        let cut_reason = acc.finish_reason().clone();
+                        let cut_names = acc.tool_call_names();
                         let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
                             Ok(turn) => turn,
                             Err(e) => {
                                 chat_span.record("otel.status_code", "ERROR");
                                 run_span.record("otel.status_code", "ERROR");
-                                failure.set(crate::AgentError::Other(anyhow::anyhow!("{e}")));
-                                yield crate::AgentEvent::RunFailed { error: e };
+                                // A cut turn (Length / ContentFilter) can leave partial
+                                // JSON in the tool args. Report that the calls were not
+                                // run, as the state machine does for a complete turn.
+                                if matches!(
+                                    cut_reason,
+                                    crate::FinishReason::Length | crate::FinishReason::ContentFilter
+                                ) {
+                                    let err = crate::AgentError::ToolCallsNotRun {
+                                        finish_reason: Some(cut_reason),
+                                        tool_names: cut_names,
+                                    };
+                                    let msg = err.to_string();
+                                    failure.set(err);
+                                    yield crate::AgentEvent::RunFailed { error: msg };
+                                } else {
+                                    failure.set(crate::AgentError::Other(anyhow::anyhow!("{e}")));
+                                    yield crate::AgentEvent::RunFailed { error: e };
+                                }
                                 return;
                             }
                         };
