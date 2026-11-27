@@ -70,7 +70,8 @@ These live in `paigasus_helikon::core` (re-exported from
   for them.
 - `ModelCapabilities` — the per-instance capability flags below.
 - `ModelError` — `Unavailable`, `RateLimited`, `ContextLengthExceeded`,
-  `Refused`, `Transport`, `Other`. The loop does **not** auto-retry on these.
+  `Refused`, `Rejected` (a non-retryable HTTP 4xx, with the status), `Transport`,
+  `Other`. The loop does **not** auto-retry on these.
 
 `ModelRequest`, `ModelSettings`, `ModelEvent`, `ModelCapabilities`,
 `ResponseFormat`, `ToolChoice`, `FinishReason`, and `ModelError` are all
@@ -133,6 +134,10 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 yields a `Result<AnthropicModel, BuildError>`.
 
 Claude 3.x models are not supported. A model id that the crate does not know reports a conservative capability set (streaming and tools). Use `.with_capabilities()` on the builder to set other values.
+
+The default feature `rustls-aws-lc` uses the aws-lc rustls provider, and the facade feature `anthropic` uses it. A host that needs `rustls-no-provider` depends on `paigasus-helikon-providers-anthropic` directly, with `default-features = false, features = ["rustls-no-provider"]`. The host must then install a rustls `CryptoProvider` as the process default before `build()` (for example `rustls::crypto::ring::default_provider().install_default()`), or pass its own client with `http_client`. Otherwise `build()` returns `BuildError::NoCryptoProvider`. `build()` does not trim the key. A key with a byte that a header cannot hold, for example a trailing newline, gives `BuildError::InvalidAuthCredential`.
+
+The adapter maps HTTP 400, 401, 403, 404 and 413 to `ModelError::Rejected { status, error_type, message }`. It maps HTTP 429 (`rate_limit_error` or `billing_error`) to `RateLimited` with the `retry-after` value, and HTTP 529 and 5xx to `Unavailable`. The stop reason `refusal` gives `Refused`. `RetryingModel` does not retry `Rejected`.
 
 Anthropic uses provider tool types. If a tool declares an `anthropic` type, the adapter sends the typed entry, for example `{"type": "memory_20250818", "name": "memory"}`, with no description and no input schema. To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic schema. See [Provider tool types](./tools.md#provider-tool-types).
 
@@ -536,15 +541,15 @@ loop will drive it.
 
 ```toml
 [dependencies]
-paigasus-helikon = { version = "0.8", features = ["openai", "macros"] }
+paigasus-helikon = { version = "0.10", features = ["openai", "macros"] }
 # or, for Anthropic:
-# paigasus-helikon = { version = "0.8", features = ["anthropic", "macros"] }
+# paigasus-helikon = { version = "0.10", features = ["anthropic", "macros"] }
 # or, for Bedrock:
-# paigasus-helikon = { version = "0.8", features = ["bedrock", "macros"] }
+# paigasus-helikon = { version = "0.10", features = ["bedrock", "macros"] }
 # or, for Gemini:
-# paigasus-helikon = { version = "0.8", features = ["gemini", "macros"] }
+# paigasus-helikon = { version = "0.10", features = ["gemini", "macros"] }
 # or, for LiteLLM:
-# paigasus-helikon = { version = "0.8", features = ["litellm", "macros"] }
+# paigasus-helikon = { version = "0.10", features = ["litellm", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are

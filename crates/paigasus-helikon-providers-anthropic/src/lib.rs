@@ -17,6 +17,26 @@
 //! # Ok(()) }
 //! ```
 //!
+//! # TLS
+//!
+//! The default feature `rustls-aws-lc` uses the aws-lc rustls provider. The
+//! facade feature `anthropic` uses this default. With
+//! `default-features = false, features = ["rustls-no-provider"]`, the host
+//! must install a rustls `CryptoProvider` as the process default before
+//! `build()`, or pass its own client with `http_client`. Otherwise `build()`
+//! returns [`BuildError::NoCryptoProvider`]. The key is not trimmed. A key
+//! with a byte that a header cannot hold, for example a trailing newline,
+//! gives [`BuildError::InvalidAuthCredential`]. `Debug` writes `<redacted>`
+//! for the key.
+//!
+//! # Errors
+//!
+//! HTTP 400, 401, 403, 404 and 413 map to `ModelError::Rejected` with the
+//! status, the error type and the message. HTTP 429 maps to
+//! `ModelError::RateLimited` with the `retry-after` value. HTTP 529 and 5xx
+//! map to `ModelError::Unavailable`. The stop reason `refusal` maps to
+//! `ModelError::Refused`. `RetryingModel` does not retry `Rejected`.
+//!
 //! # Extended thinking in a tool loop
 //!
 //! The stream keeps each `thinking` and `redacted_thinking` block as a

@@ -23,6 +23,31 @@ Pass `model` to `LlmAgent::builder::<()>().model(model)`. The provider lives ent
 
 Claude 3.x models are not supported. A model id that the crate does not know reports a conservative capability set (streaming and tools). Use `.with_capabilities()` on the builder to set other values.
 
+## TLS and errors
+
+The default feature `rustls-aws-lc` uses the aws-lc rustls provider, as before. The facade feature `anthropic` uses this default.
+
+A host that needs another rustls provider depends on this crate directly:
+
+```bash
+cargo add paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider
+```
+
+With `default-features = false, features = ["rustls-no-provider"]`, the crate has no rustls provider. The host must install a rustls `CryptoProvider` as the process default before `build()`, for example `rustls::crypto::ring::default_provider().install_default()`. Or the host passes its own client with `http_client(...)`. Otherwise `build()` returns `BuildError::NoCryptoProvider`. The rule reads only the features of this crate. It applies also when another crate gives `reqwest` a provider.
+
+`build()` checks the API key one time. The key is not trimmed. A key with a byte that an HTTP header cannot hold, for example a trailing newline, gives `BuildError::InvalidAuthCredential`. `Debug` writes `<redacted>` for the key, and the auth header is marked sensitive.
+
+The adapter maps HTTP errors and stop reasons as follows:
+
+| Source | `ModelError` |
+| --- | --- |
+| HTTP 400, 401, 403, 404, 413 | `Rejected { status, error_type, message }` |
+| HTTP 429 with `rate_limit_error` or `billing_error` | `RateLimited`, with the `retry-after` value |
+| HTTP 529 and 5xx | `Unavailable` |
+| Stop reason `refusal` | `Refused` |
+
+`RetryingModel` does not retry `Rejected`.
+
 ## Native tool types
 
 Some Anthropic tools, such as the memory tool, use a typed entry in the request: `{"type": "memory_20250818", "name": "memory"}`. A tool can declare such a type with `Tool::provider_types`. The adapter then sends the typed entry for that tool. It sends no description and no input schema.
