@@ -16,18 +16,11 @@ pub(crate) fn build_headers(cfg: &Config) -> HeaderMap {
     let mut h = HeaderMap::new();
     h.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     match &cfg.auth_header {
-        AuthHeader::ApiKey(k) => {
-            h.insert(
-                X_API_KEY,
-                HeaderValue::from_str(k).expect("API key has invalid header bytes"),
-            );
+        AuthHeader::ApiKey(v) => {
+            h.insert(X_API_KEY, v.clone());
         }
-        AuthHeader::Bearer(t) => {
-            let v = format!("Bearer {t}");
-            h.insert(
-                reqwest::header::AUTHORIZATION,
-                HeaderValue::from_str(&v).expect("bearer token has invalid header bytes"),
-            );
+        AuthHeader::Bearer(v) => {
+            h.insert(reqwest::header::AUTHORIZATION, v.clone());
         }
     }
     h.insert(
@@ -113,5 +106,25 @@ mod tests {
             messages_url(&cfg),
             "https://proxy.example.com/anthropic/v1/messages"
         );
+    }
+
+    #[test]
+    fn api_key_header_is_sensitive() {
+        let cfg = build_config_with("sk-test", &[]);
+        let h = build_headers(&cfg);
+        assert!(h.get("x-api-key").unwrap().is_sensitive());
+        assert!(!format!("{h:?}").contains("sk-test"));
+    }
+
+    #[test]
+    fn bearer_header_is_sensitive() {
+        crate::test_support::install_crypto_provider();
+        let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .bearer("ey...")
+            .build_config()
+            .unwrap();
+        let h = build_headers(&cfg);
+        assert!(h.get("authorization").unwrap().is_sensitive());
+        assert!(!format!("{h:?}").contains("ey..."));
     }
 }

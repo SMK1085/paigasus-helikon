@@ -1,7 +1,9 @@
 //! [`AnthropicModelBuilder`] — fluent constructor for [`crate::AnthropicModel`].
 
 use paigasus_helikon_core::ModelCapabilities;
+use reqwest::header::HeaderValue;
 use reqwest::Url;
+use std::fmt;
 
 use crate::capabilities::{self, ModelEntry};
 use crate::settings::{CacheStrategy, Effort, ExtendedThinking};
@@ -26,6 +28,10 @@ pub enum BuildError {
     /// resolved to an empty (or whitespace-only) string.
     #[error("auth credential cannot be empty")]
     EmptyAuthCredential,
+    /// The auth credential contains a byte that an HTTP header value cannot
+    /// hold (for example a newline). The text does not contain the credential.
+    #[error("auth credential contains a byte that is not valid in an HTTP header")]
+    InvalidAuthCredential,
     /// `build()` had to make its own HTTP client, but no TLS crypto provider is
     /// available: the `rustls-aws-lc` feature is off and no rustls process
     /// default is installed.
@@ -51,11 +57,28 @@ fn default_http_client() -> Result<reqwest::Client, BuildError> {
         .map_err(|e| BuildError::HttpClient(e.to_string()))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum AuthSource {
     Env,
     ApiKey(String),
     Bearer(String),
+}
+
+// Hand-written so that no credential reaches a `Debug` text.
+impl fmt::Debug for AuthSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Env => f.write_str("Env"),
+            Self::ApiKey(_) => f
+                .debug_tuple("ApiKey")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+            Self::Bearer(_) => f
+                .debug_tuple("Bearer")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+        }
+    }
 }
 
 /// Resolved configuration handed off to [`crate::AnthropicModel`].
@@ -76,11 +99,35 @@ pub(crate) struct Config {
     pub(crate) http: reqwest::Client,
 }
 
-/// One of `x-api-key: <key>` or `authorization: Bearer <token>`.
-#[derive(Debug, Clone)]
+/// One of `x-api-key: <key>` or `authorization: Bearer <token>`. The value is
+/// checked once in `build_config` and marked sensitive.
+#[derive(Clone)]
 pub(crate) enum AuthHeader {
-    ApiKey(String),
-    Bearer(String),
+    ApiKey(HeaderValue),
+    Bearer(HeaderValue),
+}
+
+// Hand-written so that no credential reaches a `Debug` text.
+impl fmt::Debug for AuthHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ApiKey(_) => f
+                .debug_tuple("ApiKey")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+            Self::Bearer(_) => f
+                .debug_tuple("Bearer")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+        }
+    }
+}
+
+/// Make a sensitive header value, or fail without the credential in the error.
+fn sensitive_value(text: &str) -> Result<HeaderValue, BuildError> {
+    let mut v = HeaderValue::from_str(text).map_err(|_| BuildError::InvalidAuthCredential)?;
+    v.set_sensitive(true);
+    Ok(v)
 }
 
 /// Fluent builder for [`crate::AnthropicModel`].
@@ -210,19 +257,19 @@ impl AnthropicModelBuilder {
                 if key.trim().is_empty() {
                     return Err(BuildError::EmptyAuthCredential);
                 }
-                AuthHeader::ApiKey(key)
+                AuthHeader::ApiKey(sensitive_value(&key)?)
             }
             AuthSource::ApiKey(k) => {
                 if k.trim().is_empty() {
                     return Err(BuildError::EmptyAuthCredential);
                 }
-                AuthHeader::ApiKey(k.clone())
+                AuthHeader::ApiKey(sensitive_value(k)?)
             }
             AuthSource::Bearer(t) => {
                 if t.trim().is_empty() {
                     return Err(BuildError::EmptyAuthCredential);
                 }
-                AuthHeader::Bearer(t.clone())
+                AuthHeader::Bearer(sensitive_value(&format!("Bearer {t}"))?)
             }
         };
 
@@ -504,5 +551,82 @@ mod tests {
         let r = AnthropicModelBuilder::new("claude-sonnet-4-6").build_config();
         restore_env(prev);
         assert!(matches!(r, Err(BuildError::EmptyAuthCredential)));
+    }
+
+    #[test]
+    fn debug_of_builder_redacts_api_key() {
+        let _g = env_lock().lock().unwrap();
+        let text = format!(
+            "{:?}",
+            AnthropicModelBuilder::new("claude-sonnet-4-6").api_key("sk-secret-868")
+        );
+        assert!(!text.contains("sk-secret-868"), "{text}");
+        assert!(text.contains("ApiKey(<redacted>)"), "{text}");
+    }
+
+    #[test]
+    fn debug_of_builder_redacts_bearer() {
+        let _g = env_lock().lock().unwrap();
+        let text = format!(
+            "{:?}",
+            AnthropicModelBuilder::new("claude-sonnet-4-6").bearer("tok-secret-868")
+        );
+        assert!(!text.contains("tok-secret-868"), "{text}");
+        assert!(text.contains("Bearer(<redacted>)"), "{text}");
+    }
+
+    #[test]
+    fn debug_of_config_redacts_key() {
+        let _g = env_lock().lock().unwrap();
+        let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-secret-868")
+            .build_config()
+            .unwrap();
+        let text = format!("{cfg:?}");
+        assert!(!text.contains("sk-secret-868"), "{text}");
+    }
+
+    #[test]
+    fn api_key_with_newline_errors_invalid_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-a\nb")
+            .build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::InvalidAuthCredential)));
+    }
+
+    #[test]
+    fn bearer_with_nul_errors_invalid_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .bearer("tok\0x")
+            .build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::InvalidAuthCredential)));
+    }
+
+    #[test]
+    fn env_key_with_carriage_return_errors_invalid_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(Some("sk-env\rx"));
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6").build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::InvalidAuthCredential)));
+    }
+
+    #[test]
+    fn invalid_auth_credential_text_has_no_key() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-secret\n868")
+            .build_config();
+        restore_env(prev);
+        let err = r.expect_err("expected an error");
+        assert!(!format!("{err}").contains("sk-secret"));
+        assert!(!format!("{err:?}").contains("sk-secret"));
     }
 }
