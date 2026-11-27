@@ -33,9 +33,11 @@ pub enum BuildError {
     #[error("auth credential contains a byte that is not valid in an HTTP header")]
     InvalidAuthCredential,
     /// `build()` had to make its own HTTP client, but no TLS crypto provider is
-    /// available: the `rustls-aws-lc` feature is off and no rustls process
-    /// default is installed.
-    #[error("no TLS crypto provider: enable the `rustls-aws-lc` feature, install a rustls CryptoProvider before build(), or pass http_client()")]
+    /// available. With `rustls-aws-lc` off, `build()` needs either the
+    /// `rustls-no-provider` feature plus an installed rustls process default,
+    /// or a client passed with `http_client`. With both features off,
+    /// `build()` always needs `http_client`.
+    #[error("no TLS crypto provider: with `rustls-aws-lc` off, enable `rustls-no-provider` and install a rustls CryptoProvider before build(), or pass http_client()")]
     NoCryptoProvider,
     /// reqwest could not build the default HTTP client.
     #[error("cannot build the HTTP client: {0}")]

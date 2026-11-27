@@ -24,7 +24,8 @@
 //! `default-features = false, features = ["rustls-no-provider"]`, the host
 //! must install a rustls `CryptoProvider` as the process default before
 //! `build()`, or pass its own client with `http_client`. Otherwise `build()`
-//! returns [`BuildError::NoCryptoProvider`]. The key is not trimmed. A key
+//! returns [`BuildError::NoCryptoProvider`]. With both TLS features off,
+//! `build()` always needs `http_client`. The key is not trimmed. A key
 //! with a byte that a header cannot hold, for example a trailing newline,
 //! gives [`BuildError::InvalidAuthCredential`]. `Debug` writes `<redacted>`
 //! for the key.
