@@ -66,7 +66,7 @@ A model turn can end with `FinishReason::Length` or `FinishReason::ContentFilter
 - Semantic items (carry a full `Item`): `MessageOutput { item }`, `ToolCallItem { item }`, `ToolOutputItem { item }`, `HandoffItem { from, to }`.
 - Transitions: `AgentUpdated { agent }`.
 - Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments; they are redacted when output redaction is on), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`, `UserMessageInjected { content }`.
-- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint.
+- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint. A cancelled run can end its stream with no terminal event. A runner such as `TokioRunner` reports this as `RunError::Cancelled`. A direct `collect` of `Agent::run` returns `Ok`.
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
 

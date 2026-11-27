@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - This change is replay-breaking for a Temporal run that is in progress. It affects a run with a `Length` or `ContentFilter` model turn that holds tool calls. On replay, `transition` now fails the run at that turn, so Temporal reports a non-determinism error.
 - Before the upgrade, drain the in-flight runs, or use a blue-green task queue. See "Upgrade Discipline and Determinism" in the `paigasus-helikon-runtime-temporal` crate docs.
-- A `Length` or `ContentFilter` turn with tool calls now fails the run with `AgentError::ToolCallsNotRun`. Before, the loop ran the tool calls. On Temporal, the error arrives as `AgentError::Other` with the same text.
-- A model stream that ends with no `Finish` event and holds tool calls now fails with `AgentError::ToolCallsNotRun { finish_reason: None, .. }`. A custom `Model` must emit `Finish`.
+- A `Length` or `ContentFilter` turn with tool calls now fails the run with `AgentError::ToolCallsNotRun`. Before, the loop ran the tool calls. On Temporal, the error arrives as `AgentError::Other` with the same text, if the tool call arguments parse. If the tool call arguments are not complete JSON, or the stream has no `Finish`, the `call_model` activity fails with the reassembly text.
+- A model stream that ends with no `Finish` event and holds tool calls now fails with `AgentError::ToolCallsNotRun { finish_reason: None, .. }`. A custom `Model` must emit `Finish`. An OpenAI-compatible server that sends no `finish_reason` is one example of such a stream.
+- A cancelled run can end its stream with no terminal event. `AgentAsTool` now returns a `ToolError` for a cancelled sub-agent, not an empty string.
 
 ## [0.8.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.3...paigasus-helikon-core-v0.8.4) - 2026-11-27
 
