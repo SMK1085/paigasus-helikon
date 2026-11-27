@@ -693,10 +693,12 @@ mod tests {
             DriverEffect::Finished(o) => o,
             other => panic!("expected Finished (no ExecuteTools), got {other:?}"),
         };
-        assert_matches!(
-            outcome.status,
-            RunStatusPayload::AgentFailed(ErrorKindPayload::Other { .. })
-        );
+        let RunStatusPayload::AgentFailed(ErrorKindPayload::Other { message }) = outcome.status
+        else {
+            panic!("expected AgentFailed(Other), got {:?}", outcome.status);
+        };
+        assert!(message.contains("not run"), "got: {message}");
+        assert!(message.contains("Length"), "got: {message}");
     }
 
     #[test]
