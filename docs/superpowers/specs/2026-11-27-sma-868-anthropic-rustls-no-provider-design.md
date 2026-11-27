@@ -124,7 +124,7 @@ no `[patch]` and no path or git dependency.
 
 | Variant | Text | Rule |
 |---|---|---|
-| `NoCryptoProvider` | `no TLS crypto provider: enable the rustls-aws-lc feature, install a rustls CryptoProvider before build(), or pass http_client()` | See section 4.1. Both TLS features off also gives this error. |
+| `NoCryptoProvider` | `no TLS crypto provider: with rustls-aws-lc off, enable rustls-no-provider and install a rustls CryptoProvider before build(), or pass http_client()` | See section 4.1. With `rustls-aws-lc` off, `build()` needs either `rustls-no-provider` plus an installed process default, or a client passed with `http_client`. With both TLS features off, `build()` always needs `http_client`. |
 | `HttpClient(String)` | `cannot build the HTTP client: {0}` | `reqwest::Client::builder().build()` failed. |
 | `InvalidAuthCredential` | `auth credential contains a byte that is not valid in an HTTP header` | `HeaderValue::from_str` rejected the key or the bearer text. |
 
