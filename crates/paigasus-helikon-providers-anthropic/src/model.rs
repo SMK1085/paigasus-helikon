@@ -191,6 +191,7 @@ mod tests {
 
     #[test]
     fn capabilities_reflects_builder_lookup() {
+        crate::test_support::install_crypto_provider();
         let m = AnthropicModel::messages("claude-sonnet-4-6")
             .api_key("sk-test")
             .build()
@@ -203,6 +204,7 @@ mod tests {
 
     #[test]
     fn provider_and_model_getters() {
+        crate::test_support::install_crypto_provider();
         let m = AnthropicModel::messages("claude-sonnet-4-6")
             .api_key("sk-test")
             .build()

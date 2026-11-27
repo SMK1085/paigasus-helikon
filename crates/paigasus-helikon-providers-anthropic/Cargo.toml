@@ -11,6 +11,11 @@ homepage.workspace     = true
 keywords.workspace     = true
 categories.workspace   = true
 
+[features]
+default            = ["rustls-aws-lc"]
+rustls-aws-lc      = ["reqwest/rustls"]
+rustls-no-provider = ["reqwest/rustls-no-provider", "dep:rustls"]
+
 [dependencies]
 paigasus-helikon-core = { workspace = true }
 async-trait           = { workspace = true }
@@ -18,7 +23,8 @@ async-stream          = { workspace = true }
 eventsource-stream    = { workspace = true }
 futures-core          = { workspace = true }
 futures-util          = { workspace = true }
-reqwest               = { workspace = true, features = ["json", "stream", "rustls"] }
+reqwest               = { workspace = true, features = ["json", "stream"] }
+rustls                = { workspace = true, optional = true, features = ["std"] }
 serde                 = { workspace = true }
 serde_json            = { workspace = true }
 thiserror             = { workspace = true }
@@ -32,6 +38,7 @@ wiremock = { workspace = true }
 insta    = { workspace = true, features = ["json", "yaml"] }
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 reqwest  = { workspace = true }
+rustls   = { workspace = true, features = ["std", "aws-lc-rs"] }
 
 [lints]
 workspace = true

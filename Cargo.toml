@@ -107,6 +107,7 @@ htmd                  = "0.5"
 wiremock              = "0.6"
 rcgen                 = "0.14"
 tokio-rustls          = "0.26"
+rustls                = { version = "0.23", default-features = false }
 # Windows Job Objects, for the exec-timeout subtree kill (SMA-613). Already in
 # Cargo.lock transitively via tokio/mio, so this adds an edge, not a package.
 # Win32_Security is required, not cosmetic: CreateJobObjectW is gated

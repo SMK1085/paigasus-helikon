@@ -57,6 +57,7 @@ mod tests {
     fn build_config_with(auth: &str, beta: &[&str]) -> Config {
         // The builder's tests serialize ANTHROPIC_API_KEY env access; here we
         // skip env entirely by passing api_key explicitly.
+        crate::test_support::install_crypto_provider();
         let mut b = AnthropicModelBuilder::new("claude-sonnet-4-6").api_key(auth);
         for v in beta {
             b = b.beta(*v);
@@ -77,6 +78,7 @@ mod tests {
 
     #[test]
     fn bearer_uses_authorization() {
+        crate::test_support::install_crypto_provider();
         let b = AnthropicModelBuilder::new("claude-sonnet-4-6").bearer("ey...");
         let cfg = b.build_config().unwrap();
         let h = build_headers(&cfg);
@@ -102,6 +104,7 @@ mod tests {
 
     #[test]
     fn messages_url_trims_trailing_slash() {
+        crate::test_support::install_crypto_provider();
         let b = AnthropicModelBuilder::new("claude-sonnet-4-6")
             .api_key("sk-x")
             .base_url("https://proxy.example.com/anthropic/");

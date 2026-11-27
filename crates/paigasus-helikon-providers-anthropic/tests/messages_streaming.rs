@@ -3,6 +3,8 @@
 //! Note: wiremock serves the full fixture body in a single chunk; these
 //! tests prove byte-level correctness, not resilience to slow chunk delivery.
 
+mod common;
+
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelError, ModelEvent, ModelRequest,
@@ -37,6 +39,7 @@ async fn run_stream(
         .mount(server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -213,6 +216,7 @@ async fn multi_turn_tool_use_continuation() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())

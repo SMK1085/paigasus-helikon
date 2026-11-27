@@ -1,5 +1,7 @@
 //! Wire-format tests for the request side of Anthropic Messages.
 
+mod common;
+
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, Model, ModelError, ModelRequest,
@@ -53,6 +55,7 @@ async fn request_carries_required_headers() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -86,6 +89,7 @@ async fn http_429_with_retry_after_maps_to_rate_limited() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -121,6 +125,7 @@ async fn http_529_overloaded_maps_to_unavailable() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -151,6 +156,7 @@ async fn http_400_prompt_too_long_maps_to_context_length_exceeded() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -181,6 +187,7 @@ async fn http_401_auth_maps_to_refused() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-bad")
         .base_url(server.uri())
@@ -207,6 +214,7 @@ async fn blank_only_request_fails_without_http_call() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -230,6 +238,7 @@ async fn typed_tool_entry_is_sent_in_request_body() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())

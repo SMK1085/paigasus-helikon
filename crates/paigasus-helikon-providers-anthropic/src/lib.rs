@@ -68,6 +68,8 @@ mod provider_data;
 mod settings;
 mod sse;
 mod stream;
+#[cfg(test)]
+mod test_support;
 mod translate;
 
 pub use builder::{AnthropicModelBuilder, BuildError};

@@ -1,5 +1,7 @@
 //! Acceptance-criterion test: prompt caching reduces second-turn input tokens.
 
+mod common;
+
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ToolDef,
@@ -88,6 +90,7 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
         serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}}}),
     );
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())

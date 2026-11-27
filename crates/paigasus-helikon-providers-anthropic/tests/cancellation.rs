@@ -1,6 +1,8 @@
 //! Cancellation: the stream must terminate without emitting Finish when the
 //! CancellationToken fires mid-flight.
 
+mod common;
+
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest,
@@ -43,6 +45,7 @@ async fn cancellation_before_first_chunk_emits_no_finish() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -107,6 +110,7 @@ async fn uncancelled_stream_emits_exactly_one_finish() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -165,6 +169,7 @@ async fn cancel_between_buffered_events_yields_no_finish() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())

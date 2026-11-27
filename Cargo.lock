@@ -4297,6 +4297,7 @@ dependencies = [
  "insta",
  "paigasus-helikon-core",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror",

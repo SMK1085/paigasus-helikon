@@ -26,6 +26,29 @@ pub enum BuildError {
     /// resolved to an empty (or whitespace-only) string.
     #[error("auth credential cannot be empty")]
     EmptyAuthCredential,
+    /// `build()` had to make its own HTTP client, but no TLS crypto provider is
+    /// available: the `rustls-aws-lc` feature is off and no rustls process
+    /// default is installed.
+    #[error("no TLS crypto provider: enable the `rustls-aws-lc` feature, install a rustls CryptoProvider before build(), or pass http_client()")]
+    NoCryptoProvider,
+    /// reqwest could not build the default HTTP client.
+    #[error("cannot build the HTTP client: {0}")]
+    HttpClient(String),
+}
+
+/// Make the default HTTP client. With `rustls-aws-lc` off, a rustls process
+/// default must exist, or the call returns [`BuildError::NoCryptoProvider`].
+fn default_http_client() -> Result<reqwest::Client, BuildError> {
+    #[cfg(all(feature = "rustls-no-provider", not(feature = "rustls-aws-lc")))]
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        return Err(BuildError::NoCryptoProvider);
+    }
+    #[cfg(not(any(feature = "rustls-no-provider", feature = "rustls-aws-lc")))]
+    return Err(BuildError::NoCryptoProvider);
+    #[cfg(any(feature = "rustls-no-provider", feature = "rustls-aws-lc"))]
+    reqwest::Client::builder()
+        .build()
+        .map_err(|e| BuildError::HttpClient(e.to_string()))
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +149,8 @@ impl AnthropicModelBuilder {
         self
     }
 
-    /// Use a caller-provided `reqwest::Client`.
+    /// Use a caller-provided `reqwest::Client`. Under `rustls-no-provider`, a
+    /// caller client skips the crypto-provider check.
     pub fn http_client(mut self, c: reqwest::Client) -> Self {
         self.http_client = Some(c);
         self
@@ -228,7 +252,10 @@ impl AnthropicModelBuilder {
             Some(betas.join(","))
         };
 
-        let http = self.http_client.unwrap_or_default();
+        let http = match self.http_client {
+            Some(c) => c,
+            None => default_http_client()?,
+        };
 
         Ok(Config {
             model_id: self.model_id,
@@ -257,6 +284,7 @@ mod tests {
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     fn env_lock() -> &'static Mutex<()> {
+        crate::test_support::install_crypto_provider();
         ENV_LOCK.get_or_init(|| Mutex::new(()))
     }
 
