@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015dJ8aDsbKpbd69U6QzPwk7",
+  "agent_id": "a01981cb0acb1f9cf",
+  "subagent_type": "general-purpose",
+  "task_description": "Task 8: run full CI gate",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 69280,
+    "cache_read_tokens": 970711,
+    "output_tokens": 4036,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-27T23:38:33.552992+01:00",
+  "completed_at": "2026-11-27T23:42:15.033221+01:00"
+}

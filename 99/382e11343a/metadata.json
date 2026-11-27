@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "99382e11343a",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-864-the-agent-loop-runs-a-tool-call-from-a-turn",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-core/src/agent_as_tool.rs",
+    "crates/paigasus-helikon-core/src/model.rs",
+    "crates/paigasus-helikon-core/tests/agent_as_tool.rs",
+    "crates/paigasus-helikon-core/tests/tool_calls_not_run.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/99/382e11343a/0/metadata.json",
+      "transcript": "/99/382e11343a/0/full.jsonl",
+      "compact_transcript": "/99/382e11343a/0/transcript.jsonl",
+      "content_hash": "/99/382e11343a/0/content_hash.txt",
+      "prompt": "/99/382e11343a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 56411,
+    "cache_read_tokens": 6052494,
+    "output_tokens": 22486,
+    "api_call_count": 29,
+    "subagent_tokens": {
+      "input_tokens": 280,
+      "cache_creation_tokens": 698162,
+      "cache_read_tokens": 13962723,
+      "output_tokens": 80324,
+      "api_call_count": 136
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 115,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 115,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
