@@ -158,3 +158,66 @@ async fn stream_without_finish_runs_no_tool() {
         "got {err:?}"
     );
 }
+
+/// A model that cancels the run after one complete tool call. As the `Model`
+/// contract says, it then ends its stream with no `Finish`.
+struct CancelAfterCall;
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::Model for CancelAfterCall {
+    async fn invoke(
+        &self,
+        _request: paigasus_helikon_core::ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<
+        futures_core::stream::BoxStream<
+            'static,
+            Result<ModelEvent, paigasus_helikon_core::ModelError>,
+        >,
+        paigasus_helikon_core::ModelError,
+    > {
+        let stream = futures_util::stream::iter([Ok(ModelEvent::ToolCallDelta {
+            call_id: "c1".into(),
+            name: Some("search".into()),
+            args_delta: "{}".into(),
+        })])
+        .chain(
+            futures_util::stream::once(async move {
+                cancel.cancel();
+                None
+            })
+            .filter_map(
+                |x: Option<Result<ModelEvent, paigasus_helikon_core::ModelError>>| async move { x },
+            ),
+        );
+        Ok(Box::pin(stream))
+    }
+
+    fn capabilities(&self) -> paigasus_helikon_core::ModelCapabilities {
+        paigasus_helikon_core::ModelCapabilities::default()
+    }
+}
+
+#[tokio::test]
+async fn cancel_during_a_tool_call_stream_is_not_a_failure() {
+    let tool = MockTool::new("search", serde_json::json!({}));
+    let agent = LlmAgent::builder::<()>()
+        .name("root")
+        .shared_model(Arc::new(CancelAfterCall))
+        .shared_tool(Arc::clone(&tool) as Arc<dyn Tool<()>>)
+        .build();
+    let ctx = RunContext::ephemeral(());
+    let mut stream = agent
+        .run(ctx, AgentInput::from_user_text("go"))
+        .await
+        .unwrap();
+    let mut terminal = None;
+    while let Some(ev) = stream.next().await {
+        if ev.is_terminal() {
+            terminal = Some(ev);
+        }
+    }
+    assert!(tool.invocations().is_empty());
+    // The runner turns a stream that ends with no terminal event into `Cancelled`.
+    assert!(terminal.is_none(), "got {terminal:?}");
+}

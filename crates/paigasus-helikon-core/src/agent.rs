@@ -1514,6 +1514,12 @@ where
                                 // A cut turn (Length / ContentFilter) can leave partial
                                 // JSON in the tool args. Report that the calls were not
                                 // run, as the state machine does for a complete turn.
+                                // A model MUST NOT emit `Finish` on cancellation. End the
+                                // stream with no terminal event, so the runner's interrupt
+                                // wins and the run ends as `Cancelled`.
+                                if ctx.cancel().is_cancelled() {
+                                    return;
+                                }
                                 // A stream with tool calls and no `Finish` event gets
                                 // `finish_reason: None`; check it first.
                                 let not_run = if !finish_seen {
