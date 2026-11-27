@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BeACb4mtVBNGEqS1t3vpkx",
+  "agent_id": "ae93bc13033d9d3cc",
+  "subagent_type": "general-purpose",
+  "task_description": "Review Task 6 (provider sweep)",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 74854,
+    "cache_read_tokens": 781682,
+    "output_tokens": 3189,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-27T23:18:42.062356+01:00",
+  "completed_at": "2026-11-27T23:19:18.518918+01:00"
+}
