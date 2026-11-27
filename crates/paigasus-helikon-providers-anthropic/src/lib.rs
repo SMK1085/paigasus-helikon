@@ -32,6 +32,8 @@
 //!
 //! # Errors
 //!
+//! An `invalid_request_error` whose message contains `prompt is too long` maps
+//! to `ModelError::ContextLengthExceeded`; this check comes first. Otherwise
 //! HTTP 400, 401, 403, 404 and 413 map to `ModelError::Rejected` with the
 //! status, the error type and the message. The error type `rate_limit_error`,
 //! and the error type `billing_error` with HTTP 429, map to
