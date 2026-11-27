@@ -1002,6 +1002,12 @@ mod round_trip {
         for e in events {
             acc.observe(e);
         }
+        // Hand-built event lists end before the stream's own `Finish`.
+        if !acc.finish_seen() {
+            acc.observe(&ModelEvent::Finish {
+                reason: paigasus_helikon_core::FinishReason::ToolCalls,
+            });
+        }
         acc.finish().unwrap().items
     }
 

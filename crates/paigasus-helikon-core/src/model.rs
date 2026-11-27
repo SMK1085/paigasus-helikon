@@ -701,6 +701,7 @@ pub struct ModelTurnAccumulator {
     /// Names carried by deltas under a blank `call_id`, in arrival order.
     blank_names: Vec<String>,
     finish_reason: FinishReason,
+    finish_seen: bool,
     latest_usage: Option<crate::TokenUsage>,
 }
 
@@ -716,6 +717,7 @@ impl ModelTurnAccumulator {
             tool_accum: std::collections::BTreeMap::new(),
             blank_names: Vec::new(),
             finish_reason: FinishReason::Stop,
+            finish_seen: false,
             latest_usage: None,
         }
     }
@@ -760,6 +762,7 @@ impl ModelTurnAccumulator {
             }
             ModelEvent::Finish { reason } => {
                 self.finish_reason = reason.clone();
+                self.finish_seen = true;
             }
             ModelEvent::ProviderData {
                 provider,
@@ -780,6 +783,13 @@ impl ModelTurnAccumulator {
         &self.finish_reason
     }
 
+    /// Whether a `Finish` event has arrived.
+    ///
+    /// A turn with tool calls and no `Finish` event fails in [`Self::finish`].
+    pub fn finish_seen(&self) -> bool {
+        self.finish_seen
+    }
+
     /// The names of the accumulated tool calls, in `call_id` order.
     ///
     /// A call that carries no name gives an empty string.
@@ -791,7 +801,7 @@ impl ModelTurnAccumulator {
     }
 
     /// Reassemble. `Err(String)` = invalid JSON in accumulated tool-call
-    /// args, **or** an ambiguous blank-id bucket (two or more name-carrying
+    /// args, a stream with tool calls and no `Finish` event, **or** an ambiguous blank-id bucket (two or more name-carrying
     /// deltas under `""`), which is checked first, before any parse.
     pub fn finish(self) -> Result<ModelTurn, String> {
         if self.blank_names.len() >= 2 {
@@ -805,6 +815,22 @@ impl ModelTurnAccumulator {
             );
             return Err(format!(
                 "ambiguous tool calls: {count} parallel tool calls arrived under a blank call_id (names: {list}); their arguments cannot be attributed to a call"
+            ));
+        }
+        if !self.finish_seen && !self.tool_accum.is_empty() {
+            let names = self
+                .tool_accum
+                .values()
+                .map(|accum| accum.name.clone().unwrap_or_default())
+                .collect::<Vec<_>>();
+            let list = cap_names(&names);
+            tracing::warn!(
+                target: "paigasus::core::model",
+                names = %list,
+                "refusing a model turn with tool calls and no finish event"
+            );
+            return Err(format!(
+                "the model stream ended with no finish event and holds tool calls (names: {list}); the tool calls were not run"
             ));
         }
         let items = build_items(
@@ -986,6 +1012,9 @@ mod model_turn_tests {
             name: Some("zero_arg_tool".into()),
             args_delta: "".into(),
         });
+        acc.observe(&ModelEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
         let turn = acc.finish().unwrap();
         assert_eq!(turn.items.len(), 1);
         match &turn.items[0] {
@@ -1010,6 +1039,9 @@ mod model_turn_tests {
         for e in evs {
             acc.observe(e);
         }
+        acc.observe(&ModelEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
         acc.finish()
     }
 
@@ -1283,6 +1315,30 @@ mod tests {
         assert!(c.prompt_caching, "with_prompt_caching must set the flag");
         let d = ModelCapabilities::default();
         assert!(!d.prompt_caching, "default must be false");
+    }
+
+    #[test]
+    fn no_finish_with_tool_call_is_an_error() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::ToolCallDelta {
+            call_id: "c1".into(),
+            name: Some("search".into()),
+            args_delta: "{}".into(),
+        });
+        assert!(!acc.finish_seen());
+        let err = acc
+            .finish()
+            .expect_err("a tool call with no Finish must fail");
+        assert!(err.contains("search"), "got {err}");
+    }
+
+    #[test]
+    fn no_finish_text_only_still_stop() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::TokenDelta { text: "hi".into() });
+        assert!(!acc.finish_seen());
+        let turn = acc.finish().expect("a text-only turn needs no Finish");
+        assert_eq!(turn.finish_reason, crate::FinishReason::Stop);
     }
 
     #[test]

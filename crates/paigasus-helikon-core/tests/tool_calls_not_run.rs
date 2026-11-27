@@ -136,3 +136,25 @@ async fn cut_call_is_not_recorded_in_the_session() {
         "{log:?}"
     );
 }
+
+#[tokio::test]
+async fn stream_without_finish_runs_no_tool() {
+    let script = vec![ModelEvent::ToolCallDelta {
+        call_id: "c1".into(),
+        name: Some("search".into()),
+        args_delta: String::new(),
+    }];
+    let (agent, tool) = agent_for(script);
+    let err = run_error(&agent).await;
+    assert!(tool.invocations().is_empty());
+    assert!(
+        matches!(
+            err,
+            RunError::Agent(AgentError::ToolCallsNotRun {
+                finish_reason: None,
+                ..
+            })
+        ),
+        "got {err:?}"
+    );
+}

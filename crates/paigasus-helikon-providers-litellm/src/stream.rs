@@ -856,6 +856,12 @@ mod tests {
         for e in evs {
             acc.observe(e);
         }
+        // These event slices end before the stream's own `Finish`.
+        if !acc.finish_seen() {
+            acc.observe(&ModelEvent::Finish {
+                reason: paigasus_helikon_core::FinishReason::ToolCalls,
+            });
+        }
         Ok(acc
             .finish()?
             .items

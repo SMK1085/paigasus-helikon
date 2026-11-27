@@ -1505,6 +1505,7 @@ where
                         // Read these before `finish()` consumes the accumulator.
                         let cut_reason = acc.finish_reason().clone();
                         let cut_names = acc.tool_call_names();
+                        let finish_seen = acc.finish_seen();
                         let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
                             Ok(turn) => turn,
                             Err(e) => {
@@ -1513,12 +1514,21 @@ where
                                 // A cut turn (Length / ContentFilter) can leave partial
                                 // JSON in the tool args. Report that the calls were not
                                 // run, as the state machine does for a complete turn.
-                                if matches!(
+                                // A stream with tool calls and no `Finish` event gets
+                                // `finish_reason: None`; check it first.
+                                let not_run = if !finish_seen {
+                                    Some(None)
+                                } else if matches!(
                                     cut_reason,
                                     crate::FinishReason::Length | crate::FinishReason::ContentFilter
                                 ) {
+                                    Some(Some(cut_reason))
+                                } else {
+                                    None
+                                };
+                                if let Some(finish_reason) = not_run {
                                     let err = crate::AgentError::ToolCallsNotRun {
-                                        finish_reason: Some(cut_reason),
+                                        finish_reason,
                                         tool_names: cut_names,
                                     };
                                     let msg = err.to_string();
