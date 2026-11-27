@@ -8,7 +8,7 @@
 ## 1. Intent
 
 The paigasus-core agent host uses only the `ring` rustls provider. It must use
-`paigasus-helikon-providers-anthropic` and keep `aws-lc-rs` out of its lock file. The
+`paigasus-helikon-providers-anthropic`. The lock file of the host must not list `aws-lc-rs`. The
 provider must let the caller install the rustls provider. The host must also see the
 HTTP status of a non-retryable 4xx answer, so that it can classify the fault.
 
@@ -92,21 +92,23 @@ rustls  = { workspace = true, optional = true, features = ["std"] }
 - `set_sensitive(true)` is set on the `x-api-key` and `authorization` header values.
 - `build()` checks the key once. `HeaderValue::from_str` must accept it, or `build()`
   returns `BuildError::InvalidAuthCredential`. The `expect` in `build_headers` goes away.
+- The check applies to all three sources: `api_key()`, `bearer()` and `ANTHROPIC_API_KEY`.
+  The error text never contains the key.
+- `AnthropicModelBuilder`, `Config` and `AnthropicModel` keep a derived `Debug`. They
+  show the redacted form of the key.
 
 ### 4.3 Errors
 
 - Core gets `ModelError::Rejected { status: u16, error_type: String, message: String }`
   for a non-retryable HTTP 4xx. This is an addition to a `#[non_exhaustive]` enum, so core
   gets a non-breaking release.
-- The Anthropic provider maps 400, 401, 403, 404 and 413 to `Rejected`. 429
-  `billing_error` becomes `RateLimited` and keeps `retry-after`. The `refusal` stop
-  reason stays `Refused`.
+- The Anthropic provider uses it for 400, 401, 403, 404 and 413. Section 5.2 has the
+  full mapping.
 - The other providers do not change in this PR.
 
 ### 4.4 Models
 
-Add `claude-sonnet-5-5` and `claude-opus-5-5` to `KNOWN_MODELS`, with their output limits
-and capabilities.
+Add `claude-sonnet-5-5` and `claude-opus-5-5` to `KNOWN_MODELS`. Section 5.3 has the values.
 
 ### 4.5 Release
 
@@ -122,15 +124,11 @@ no `[patch]` and no path or git dependency.
 
 | Variant | Text | Rule |
 |---|---|---|
-| `NoCryptoProvider` | `no TLS crypto provider: enable the rustls-aws-lc feature, install a rustls CryptoProvider before build(), or pass http_client()` | `rustls-aws-lc` off and no process default (or both TLS features off). |
+| `NoCryptoProvider` | `no TLS crypto provider: enable the rustls-aws-lc feature, install a rustls CryptoProvider before build(), or pass http_client()` | See section 4.1. Both TLS features off also gives this error. |
 | `HttpClient(String)` | `cannot build the HTTP client: {0}` | `reqwest::Client::builder().build()` failed. |
 | `InvalidAuthCredential` | `auth credential contains a byte that is not valid in an HTTP header` | `HeaderValue::from_str` rejected the key or the bearer text. |
 
 - The empty-key check (`EmptyAuthCredential`) runs first.
-- The rule for `InvalidAuthCredential` applies to all three sources: `api_key()`,
-  `bearer()` and `ANTHROPIC_API_KEY`. The text never contains the key.
-- `AnthropicModelBuilder`, `Config` and `AnthropicModel` keep a derived `Debug`. They
-  show the redacted form of the key.
 - Test support: under `rustls-no-provider`, the unit and integration tests install an
   aws-lc provider from a dev-dependency. Under `rustls-aws-lc` the install is empty, so the
   `--all-features` run proves the default path with no installed provider.
@@ -165,16 +163,17 @@ prompt caching. `structured_output` is off. `max_output_default` is 32 768.
 
 | Value | Sonnet 5.5 | Opus 5.5 |
 |---|---|---|
-| streaming, tools | Captured fixture `empty_thinking_tool_use.txt` (SMA-840). The models overview (quoted in SMA-850) says all current models support vision and tool use. | The same overview quote. No capture in the repo. |
-| parallel tool calls | Neighbor rows only. No source in the repo. | Neighbor rows only. No source in the repo. |
+| streaming, tools | Captured fixture `empty_thinking_tool_use.txt` (SMA-840). The models overview (quoted in SMA-850) says all current models support vision and tool use. | Assumed, copied from the row `claude-opus-4-7`. The same overview quote supports it. No capture in the repo. |
+| parallel tool calls | Assumed, copied from the row `claude-sonnet-4-6`. No other source in the repo. | Assumed, copied from the row `claude-opus-4-7`. No other source in the repo. |
 | `structured_output` off | This crate forces a tool choice (`tool_choice: {"type":"tool"}`). The Bedrock provider records that these models reject a forced tool choice. See SMA-839 (Bedrock). SMA-848 is an open check for this provider. | The same. |
 | vision | The overview quote. | The overview quote. |
 | reasoning | The model thinks by default and needs `Adaptive`. The captured fixture has a thinking block. | Opus 4.7 and later reject `Enabled`, so the model has adaptive thinking. No capture. |
-| prompt caching | Neighbor rows. The captured `usage` has cache fields with value 0. No direct source. | Neighbor rows. No source in the repo. |
+| prompt caching | Assumed, copied from the row `claude-sonnet-4-6`. The captured `usage` has cache fields with value 0. This does not prove the support. | Assumed, copied from the row `claude-opus-4-7`. No other source in the repo. |
 | `max_output_default` 32 768 | SMA-850 design: Sven's call, the same as the other current rows. It is the default `max_tokens`, not the model maximum. | The same. |
 
-Each value with the text "no source" is an unverified assumption. The reader must not
-treat it as measured.
+Each value marked "Assumed" is not verified. Do not treat it as measured.
+
+Until SMA-848 closes, a caller loses structured output on these two ids.
 
 ### 5.4 Versions, and why every version is bumped by hand
 
@@ -188,9 +187,9 @@ treat it as measured.
 
 The provider uses a core API from the same PR, so core needs a hand bump. A hand-bumped
 sibling needs a hand-bumped facade. A hand-bumped facade publishes on the merge with the
-old provider requirement. A later release-plz bump of the provider to 0.4.0 would then give
-the facade only a patch, and the breaking-cascade guard would fail on the release PR. So
-every crate in the chain gets its final version in this PR. The guard then checks this PR.
+old provider requirement. Then release-plz bumps the provider to 0.4.0 later. That bump
+gives the facade only a patch. The breaking-cascade guard then fails on the release PR.
+So every crate in the chain gets its final version in this PR. The guard then checks this PR.
 After the merge, release-plz opens a release PR that gives the other core dependents a
 patch. That is normal and non-breaking.
 
