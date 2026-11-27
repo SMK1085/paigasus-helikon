@@ -69,7 +69,9 @@ rustls  = { workspace = true, optional = true, features = ["std"] }
   re-export rustls. It has no provider feature, so it adds no crypto provider.
 - The default feature set stays `["rustls-aws-lc"]` (A3). The facade `anthropic` feature
   keeps the default `rustls-aws-lc`. A caller that wants `rustls-no-provider` makes a
-  direct dependency on the provider with `default-features = false`.
+  direct dependency on the provider with `default-features = false`. That host must not
+  enable the facade feature `anthropic`, because it turns on `rustls-aws-lc`, and a direct
+  dependency with `default-features = false` cannot turn it off again (Cargo features only add).
 - There is no `compile_error!`. When `build()` must make its own client, and no TLS feature
   can give one, `build()` returns the new `BuildError::NoCryptoProvider`. It never panics.
   This is the case when `rustls-aws-lc` is off and

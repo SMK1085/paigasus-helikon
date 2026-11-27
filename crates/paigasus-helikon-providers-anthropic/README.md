@@ -25,7 +25,7 @@ Claude 3.x models are not supported. A model id that the crate does not know rep
 
 ## TLS and errors
 
-The default feature `rustls-aws-lc` uses the aws-lc rustls provider, as before. The facade feature `anthropic` uses this default.
+The default feature `rustls-aws-lc` uses the aws-lc rustls provider, as before. The facade feature `anthropic` uses this default. A host that needs `rustls-no-provider` must not enable the facade feature `anthropic`, because it turns on `rustls-aws-lc`, and a direct dependency with `default-features = false` cannot turn it off again (Cargo features only add).
 
 A host that needs another rustls provider depends on this crate directly:
 

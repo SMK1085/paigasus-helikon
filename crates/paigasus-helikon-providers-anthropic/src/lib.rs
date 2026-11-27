@@ -20,7 +20,9 @@
 //! # TLS
 //!
 //! The default feature `rustls-aws-lc` uses the aws-lc rustls provider. The
-//! facade feature `anthropic` uses this default. With
+//! facade feature `anthropic` uses this default. A host that needs
+//! `rustls-no-provider` must not enable the facade feature `anthropic`, because
+//! it turns on `rustls-aws-lc` and Cargo features only add. With
 //! `default-features = false, features = ["rustls-no-provider"]`, the host
 //! must install a rustls `CryptoProvider` as the process default before
 //! `build()`, or pass its own client with `http_client`. Otherwise `build()`

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(providers-anthropic)* [**breaking**] SMA-868 add a `rustls-no-provider` feature and map http 4xx to `Rejected`
 - The features `rustls-aws-lc` and `rustls-no-provider`. `rustls-aws-lc` is the default feature and uses the aws-lc rustls provider, as before. With `rustls-no-provider`, the crate has no rustls provider. The host must install a rustls `CryptoProvider` as the process default before `build()`, or pass its own client with `http_client(...)`.
 - `BuildError::NoCryptoProvider`, `BuildError::HttpClient` and `BuildError::InvalidAuthCredential`.
+- The client that `build()` makes always uses the rustls backend.
 
 ### Fixed
 

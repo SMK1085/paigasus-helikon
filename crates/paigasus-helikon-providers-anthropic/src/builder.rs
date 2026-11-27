@@ -55,6 +55,8 @@ fn default_http_client() -> Result<reqwest::Client, BuildError> {
     return Err(BuildError::NoCryptoProvider);
     #[cfg(any(feature = "rustls-no-provider", feature = "rustls-aws-lc"))]
     reqwest::Client::builder()
+        // Another crate can turn on `reqwest/native-tls`, and then the default backend is not rustls.
+        .tls_backend_rustls()
         .build()
         .map_err(|e| BuildError::HttpClient(e.to_string()))
 }
