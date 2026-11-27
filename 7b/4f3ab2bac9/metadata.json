@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "7b4f3ab2bac9",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-864-the-agent-loop-runs-a-tool-call-from-a-turn",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/loop_state.rs",
+    "crates/paigasus-helikon-core/tests/transition_unit.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/4f3ab2bac9/0/metadata.json",
+      "transcript": "/7b/4f3ab2bac9/0/full.jsonl",
+      "compact_transcript": "/7b/4f3ab2bac9/0/transcript.jsonl",
+      "content_hash": "/7b/4f3ab2bac9/0/content_hash.txt",
+      "prompt": "/7b/4f3ab2bac9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 16452,
+    "cache_read_tokens": 1223069,
+    "output_tokens": 4734,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 20,
+      "cache_creation_tokens": 134049,
+      "cache_read_tokens": 674156,
+      "output_tokens": 7474,
+      "api_call_count": 10
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 44,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 44,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
