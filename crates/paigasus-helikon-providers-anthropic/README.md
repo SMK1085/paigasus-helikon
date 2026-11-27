@@ -43,7 +43,7 @@ The adapter maps HTTP errors and stop reasons as follows:
 | --- | --- |
 | HTTP 400, 401, 403, 404, 413 | `Rejected { status, error_type, message }` |
 | HTTP 429 with `rate_limit_error` or `billing_error` | `RateLimited`, with the `retry-after` value |
-| HTTP 529 and 5xx | `Unavailable` |
+| HTTP 500 to 504 and 529 | `Unavailable` |
 | Stop reason `refusal` | `Refused` |
 
 `RetryingModel` does not retry `Rejected`.

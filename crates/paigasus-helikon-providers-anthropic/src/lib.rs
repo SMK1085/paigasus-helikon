@@ -32,9 +32,10 @@
 //! # Errors
 //!
 //! HTTP 400, 401, 403, 404 and 413 map to `ModelError::Rejected` with the
-//! status, the error type and the message. HTTP 429 maps to
-//! `ModelError::RateLimited` with the `retry-after` value. HTTP 529 and 5xx
-//! map to `ModelError::Unavailable`. The stop reason `refusal` maps to
+//! status, the error type and the message. The error type `rate_limit_error`,
+//! and the error type `billing_error` with HTTP 429, map to
+//! `ModelError::RateLimited` with the `retry-after` value. HTTP 500 to 504
+//! and 529 map to `ModelError::Unavailable`. The stop reason `refusal` maps to
 //! `ModelError::Refused`. `RetryingModel` does not retry `Rejected`.
 //!
 //! # Extended thinking in a tool loop
