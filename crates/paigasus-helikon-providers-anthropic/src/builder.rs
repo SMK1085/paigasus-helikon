@@ -512,6 +512,17 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_5_uses_its_known_row() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(Some("sk-x"));
+        let c = AnthropicModelBuilder::new("claude-sonnet-5-5")
+            .build_config()
+            .unwrap();
+        restore_env(prev);
+        assert_eq!(c.max_output_default, 32_768);
+    }
+
+    #[test]
     fn unknown_model_uses_conservative_max_output_default() {
         let _g = env_lock().lock().unwrap();
         let prev = save_and_set_env(Some("sk-x"));
