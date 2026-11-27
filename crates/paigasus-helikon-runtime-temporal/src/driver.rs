@@ -672,6 +672,34 @@ mod tests {
     }
 
     #[test]
+    fn length_turn_with_tool_call_finishes_failed_without_tools() {
+        let mut d = DurableDriver::new(input(vec![user("hi")]), plan_no_tools());
+        assert_matches!(d.next_effect(), DriverEffect::RenderInstructions);
+        d.apply_instructions(String::new());
+        assert_matches!(d.next_effect(), DriverEffect::CallModel(_));
+
+        d.apply_model(ModelTurnResult(ModelTurn::new(
+            vec![Item::ToolCall {
+                call_id: "c1".into(),
+                name: "search".into(),
+                args: serde_json::json!({}),
+            }],
+            usage(1, 1),
+            FinishReason::Length,
+        )));
+
+        // The cut turn must never yield `ExecuteTools`.
+        let outcome = match d.next_effect() {
+            DriverEffect::Finished(o) => o,
+            other => panic!("expected Finished (no ExecuteTools), got {other:?}"),
+        };
+        assert_matches!(
+            outcome.status,
+            RunStatusPayload::AgentFailed(ErrorKindPayload::Other { .. })
+        );
+    }
+
+    #[test]
     fn max_turns_exceeded_maps_to_typed_error() {
         let mut cfg_input = input(vec![user("hi")]);
         cfg_input.config.max_turns = 1;
