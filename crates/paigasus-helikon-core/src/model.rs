@@ -779,7 +779,7 @@ impl ModelTurnAccumulator {
     pub fn finish(self) -> Result<ModelTurn, String> {
         if self.blank_names.len() >= 2 {
             let count = self.blank_names.len();
-            let list = format_blank_names(&self.blank_names);
+            let list = cap_names(&self.blank_names);
             tracing::warn!(
                 target: "paigasus::core::model",
                 count,
@@ -806,7 +806,7 @@ impl ModelTurnAccumulator {
 }
 
 /// Format at most 8 names, each cut to 64 chars and Debug-escaped.
-fn format_blank_names(names: &[String]) -> String {
+pub(crate) fn cap_names(names: &[String]) -> String {
     const MAX_NAMES: usize = 8;
     const MAX_CHARS: usize = 64;
     let mut out = names
