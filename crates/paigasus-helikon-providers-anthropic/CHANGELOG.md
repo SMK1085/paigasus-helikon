@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** an HTTP 401 or 403 now gives `ModelError::Rejected`, not `Refused`. Code that matches `Refused` for an auth failure must match `Rejected { status: 401 | 403, .. }`.
 - **Breaking:** an HTTP 400, 404 or 413 now gives `Rejected`, not `Other`. An HTTP 429 with `billing_error` now gives `RateLimited` with the `retry-after` value, not `Other`.
 - An HTTP 402, 409 or 422 with an auth error type (`authentication_error` or `permission_error`) now gives `ModelError::Other` (before: `Refused`).
-- **Breaking:** `BuildError` has the three new variants above. A `match` on `BuildError` must handle them.
+- `BuildError` has three new variants. It is `#[non_exhaustive]`, so a `match` with a wildcard arm still compiles.
 - **Breaking:** the new default feature `rustls-aws-lc` selects the TLS backend. With `default-features = false`, the crate selects no TLS backend. Enable `rustls-aws-lc` or `rustls-no-provider`.
 - `claude-fable-5-2`, `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5-5` and `claude-sonnet-5` now report streaming, tools, parallel tool calls, structured output, vision, reasoning and prompt caching. Their default `max_tokens` goes from 4096 to 32768. To keep a lower limit, set `max_output_tokens` per request.
 - `claude-haiku-4-5` now reports reasoning.
