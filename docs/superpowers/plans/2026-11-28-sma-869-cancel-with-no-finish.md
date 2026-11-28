@@ -5,6 +5,8 @@
 **Goal:** A run whose `RunContext` cancel token fired ends with
 `RunError::Cancelled` through a runner, and never `Ok(Completed)` with cut or
 earlier-turn text.
+A cancel after the `Finish` of the final text turn still ends `Completed`.
+A terminal event that already happened wins.
 
 **Architecture:** Add "token fired → return with no further event" checks in
 the `LlmAgent` loop driver (`agent.rs`), and the `AgentAsTool` guard rule
