@@ -928,6 +928,36 @@ async fn cancelled_resume_closes_the_deferral() {
     assert!(open_ids(&session).await.is_empty());
 }
 
+#[tokio::test]
+async fn prefired_cancel_on_resume_runs_no_approved_call() {
+    let session = deferred_session(&["call_1"]).await;
+    let pay = PayTool::new();
+    let agent = pay_agent(
+        "root",
+        RequestLog::with_scripts(vec![text_turn("never")]),
+        &pay,
+    );
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let ctx = ctx(session.clone(), true).with_cancel(cancel);
+
+    let result = run(&agent, ctx, input).await;
+
+    assert!(matches!(result, Err(RunError::Cancelled)), "{result:?}");
+    assert_eq!(pay.calls().len(), 0);
+    let ls = labels(&session).await;
+    assert_eq!(
+        ls[3..],
+        [
+            format!("tool_returned(call_1, {NOT_RUN})"),
+            "user_message(next)".to_owned()
+        ],
+        "{ls:?}"
+    );
+    assert!(open_ids(&session).await.is_empty());
+}
+
 /// A workflow agent cannot resume deferred calls. Its rejection must leave
 /// the session as it was, so a later resume through an `LlmAgent` still works.
 #[tokio::test]

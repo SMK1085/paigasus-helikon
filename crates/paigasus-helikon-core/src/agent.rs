@@ -1110,6 +1110,16 @@ where
                         yield crate::AgentEvent::RunFailed { error: msg };
                         return;
                     }
+                    // A cancel before the handoff runs no approved call.
+                    if ctx.cancel().is_cancelled() {
+                        for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
+                        for ev in not_run {
+                            yield ev;
+                        }
+                        return;
+                    }
                     yield crate::AgentEvent::AgentUpdated { agent: next.clone() };
                     let child_input = crate::AgentInput {
                         messages: resume_messages,
@@ -1166,6 +1176,13 @@ where
                 let results_at = results_at + closed.len();
                 for item in closed {
                     yield crate::AgentEvent::ToolOutputItem { item };
+                }
+                // A cancel before the calls run starts none of them.
+                if ctx.cancel().is_cancelled() {
+                    for ev in not_run {
+                        yield ev;
+                    }
+                    return;
                 }
                 let tool_ctx = ctx.to_tool_context();
                 let (outcomes, denied) = crate::resume_exec::run_resolved_calls(
