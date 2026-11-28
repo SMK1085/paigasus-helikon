@@ -169,7 +169,7 @@
   - `model.rs` unit `no_finish_with_tool_call_is_an_error`: observe one `ToolCallDelta` with full `"{}"` args, no `Finish` → `finish()` is `Err`.
   - `model.rs` unit `no_finish_text_only_still_stop`: observe one `TokenDelta`, no `Finish` → `Ok` with `finish_reason == Stop`.
   - `tests/tool_calls_not_run.rs` `stream_without_finish_runs_no_tool`: script `ToolCallDelta { "c1", Some("search"), "" }` and no `Finish` → `tool.invocations().is_empty()` and `RunError::Agent(AgentError::ToolCallsNotRun { finish_reason: None, .. })`.
-- [ ] **Step 2:** Run `cargo test -p paigasus-helikon-core no_finish stream_without_finish` → the two tool-call tests FAIL.
+- [ ] **Step 2:** Run `cargo test -p paigasus-helikon-core no_finish` and `cargo test -p paigasus-helikon-core stream_without_finish` (cargo takes one test filter per run) → the two tool-call tests FAIL.
 - [ ] **Step 3:** Add `finish_seen`, the check in `finish()`, and the driver rule.
 - [ ] **Step 4:** Run `cargo test --workspace --all-features`. Any test that now fails because its mock or provider sends tool calls with no `Finish`: fix the mock script (add the `Finish` it should have had) or, for a real provider, emit `Finish` where the stream contract requires it. List each changed site in the task report. Do **not** weaken the new rule to make a test pass.
 - [ ] **Step 5:** Run `cargo test --workspace --all-features` → PASS.
