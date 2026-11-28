@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "fc2a2ac0d7ff",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-869-a-cancelled-run-ends-as-completed-with-cut",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-runtime-tokio/tests/cancel_boundaries.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fc/2a2ac0d7ff/0/metadata.json",
+      "transcript": "/fc/2a2ac0d7ff/0/full.jsonl",
+      "compact_transcript": "/fc/2a2ac0d7ff/0/transcript.jsonl",
+      "content_hash": "/fc/2a2ac0d7ff/0/content_hash.txt",
+      "prompt": "/fc/2a2ac0d7ff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 28353,
+    "cache_read_tokens": 6472391,
+    "output_tokens": 11984,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 32,
+      "cache_creation_tokens": 156130,
+      "cache_read_tokens": 1163528,
+      "output_tokens": 7814,
+      "api_call_count": 16
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 103,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 103,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
