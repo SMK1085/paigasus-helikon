@@ -40,7 +40,7 @@ futures               = { version = "0.3", default-features = false, features = 
 # rustls/aws-lc-rs. Two rustls CryptoProvider features in one graph makes
 # CryptoProvider::install_default() ambiguous and panics any rustls auto-default
 # user (e.g. tools' forkd_tls test) under `cargo test --workspace --all-features`.
-gcp_auth              = { version = "0.12", default-features = false, features = ["aws-lc-rs"] }
+gcp_auth              = { version = "0.13", default-features = false, features = ["aws-lc-rs"] }
 http-body-util        = "0.1"
 hyper                 = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util            = { version = "0.1", default-features = false, features = ["tokio"] }
@@ -52,11 +52,11 @@ globset               = "0.4"
 # major version is a breaking change of core and the facade. Its PR title
 # must carry `!` (SMA-831).
 jiff                  = { version = "1", features = ["serde"] }
-jsonschema            = { version = "0.61", default-features = false }
+jsonschema            = { version = "0.63", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
-notify                = "8"
-notify-debouncer-mini = "0.7"
+notify                = "9"
+notify-debouncer-mini = "0.8"
 opentelemetry         = "0.33"
 parquet               = { version = "60", default-features = false, features = ["arrow", "snap"] }
 proc-macro-crate      = "3"
@@ -102,8 +102,8 @@ trybuild              = "1"
 url                   = "2"
 utoipa                = { version = "6.0.0", default-features = false, features = ["macros", "axum_extras"] }
 uuid                  = { version = "1.23.4", default-features = false, features = ["v4"] }
-dom_smoothie          = "0.19"
-htmd                  = "0.5"
+dom_smoothie          = "0.20"
+htmd                  = "0.6"
 wiremock              = "0.6"
 rcgen                 = "0.14"
 tokio-rustls          = "0.26"
