@@ -1121,6 +1121,17 @@ where
                         return;
                     }
                     yield crate::AgentEvent::AgentUpdated { agent: next.clone() };
+                    // A consumer can cancel while `AgentUpdated` is delivered.
+                    // Check again so the target does not start after a cancel.
+                    if ctx.cancel().is_cancelled() {
+                        for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
+                        for ev in not_run {
+                            yield ev;
+                        }
+                        return;
+                    }
                     let child_input = crate::AgentInput {
                         messages: resume_messages,
                         resume_plan: Some(plan.descend()),
@@ -1746,6 +1757,11 @@ where
                             to: target.clone(),
                         };
 
+                        // A consumer can cancel while `HandoffItem` is delivered.
+                        // Check again so the target does not start after a cancel.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let input = crate::AgentInput { messages: transcript, ..Default::default() };
                         // Starting the child emits no event. Start it before the
                         // transfer results, because their text tells whether

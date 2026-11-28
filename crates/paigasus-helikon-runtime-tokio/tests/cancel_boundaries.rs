@@ -477,3 +477,66 @@ async fn cancel_after_transfer_finish_does_no_handoff() {
         "last event must be the cancel terminal: {events:?}"
     );
 }
+
+/// A consumer can cancel while `HandoffItem` is delivered. The live handoff
+/// path checks the token again, so the target does not start and no
+/// "transferred to" result appears.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_on_handoff_item_starts_no_target() {
+    let token = CancellationToken::new();
+    let model = CancelScriptModel::new(token.clone(), vec![tool_call_turn("transfer_to_target")]);
+    let target_model = CancelScriptModel::new(token.clone(), vec![late_text_turn()]);
+    let target = LlmAgent::builder::<()>()
+        .name("target")
+        .shared_model(target_model)
+        .build();
+    let agent = LlmAgent::builder::<()>()
+        .name("root")
+        .shared_model(model)
+        .handoff(target)
+        .build();
+    let rs = TokioRunner
+        .run_streamed(
+            &agent,
+            run_context_with_cancel(token.clone()),
+            AgentInput::from_user_text("go"),
+            RunConfig::default(),
+        )
+        .await
+        .expect("stream starts");
+    let mut events = Vec::new();
+    let mut stream = rs.events;
+    while let Some(ev) = stream.next().await {
+        if matches!(ev, AgentEvent::HandoffItem { .. }) {
+            token.cancel();
+        }
+        events.push(ev);
+    }
+    let handoff_at = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::HandoffItem { .. }))
+        .expect("the handoff item is emitted");
+    assert!(
+        !events[handoff_at..]
+            .iter()
+            .any(|e| matches!(e, AgentEvent::AgentUpdated { .. })),
+        "the target must not start: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolOutputItem { item: Item::ToolResult { content, .. } }
+                if content.iter().any(|p| matches!(
+                    p, ContentPart::Text { text } if text.contains("transferred to")
+                ))
+        )),
+        "no transfer result for a target that did not run: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::RunFailed { error }) if error == "run cancelled"
+        ),
+        "last event must be the cancel terminal: {events:?}"
+    );
+}
