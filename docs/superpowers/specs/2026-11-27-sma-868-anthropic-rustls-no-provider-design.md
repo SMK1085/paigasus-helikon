@@ -110,7 +110,8 @@ rustls  = { workspace = true, optional = true, features = ["std"] }
 
 ### 4.4 Models
 
-Add `claude-sonnet-5-5` and `claude-opus-5-5` to `KNOWN_MODELS`. Section 5.3 has the values.
+PR #403 on `main` added the `claude-sonnet-5-5` and `claude-opus-5-5` rows to `KNOWN_MODELS`.
+This branch adds only tests that assert those rows. Section 5.3 has the values.
 
 ### 4.5 Release
 
@@ -160,22 +161,21 @@ no `[patch]` and no path or git dependency.
 
 ### 5.3 The two model rows
 
-Both rows have the same values: streaming, tools, parallel tool calls, vision, reasoning,
-prompt caching. `structured_output` is off. `max_output_default` is 32 768.
+The rows come from PR #403 on `main`. This branch rebased onto it and took its values as
+they are. Both rows have the full set: streaming, tools, parallel tool calls,
+`structured_output`, vision, reasoning and prompt caching. `max_output_default` is 32 768.
 
-| Value | Sonnet 5.5 | Opus 5.5 |
-|---|---|---|
-| streaming, tools | Captured fixture `empty_thinking_tool_use.txt` (SMA-840). The models overview (quoted in SMA-850) says all current models support vision and tool use. | Assumed, copied from the row `claude-opus-4-7`. The same overview quote supports it. No capture in the repo. |
-| parallel tool calls | Assumed, copied from the row `claude-sonnet-4-6`. No other source in the repo. | Assumed, copied from the row `claude-opus-4-7`. No other source in the repo. |
-| `structured_output` off | This crate forces a tool choice (`tool_choice: {"type":"tool"}`). The Bedrock provider records that these models reject a forced tool choice. See SMA-839 (Bedrock). SMA-848 is an open check for this provider. | The same. |
-| vision | The overview quote. | The overview quote. |
-| reasoning | The model thinks by default and needs `Adaptive`. The captured fixture has a thinking block. | Opus 4.7 and later reject `Enabled`, so the model has adaptive thinking. No capture. |
-| prompt caching | Assumed, copied from the row `claude-sonnet-4-6`. The captured `usage` has cache fields with value 0. This does not prove the support. | Assumed, copied from the row `claude-opus-4-7`. No other source in the repo. |
-| `max_output_default` 32 768 | SMA-850 design: Sven's call, the same as the other current rows. It is the default `max_tokens`, not the model maximum. | The same. |
+Source (#403): the Models API lists vision, structured outputs and thinking for each model.
 
-Each value marked "Assumed" is not verified. Do not treat it as measured.
+Decision (Sven, 2026-11-28, PR 405): keep the #403 values. This replaces the earlier plan
+ruling F4, which set `structured_output` off for these two ids.
 
-Until SMA-848 closes, a caller loses structured output on these two ids.
+Open point: this crate makes structured output with a forced tool choice
+(`tool_choice: {"type":"tool"}`, `response_format.rs:57-77`). The Models API listing does not
+test that path. On Bedrock, these models reject a forced tool choice (SMA-839). SMA-848 checks
+the path on the Anthropic API for every Claude 5 row from #403. If SMA-848 finds a rejection,
+a structured-output request to one of these ids fails with `Rejected` (HTTP 400). It does not
+fail silently.
 
 ### 5.4 Versions, and why every version is bumped by hand
 
