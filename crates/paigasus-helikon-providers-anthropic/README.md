@@ -31,9 +31,10 @@ A host that needs another rustls provider depends on this crate directly:
 
 ```bash
 cargo add paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider
+cargo add rustls --no-default-features -F ring,std
 ```
 
-With `default-features = false, features = ["rustls-no-provider"]`, the crate has no rustls provider. The host must install a rustls `CryptoProvider` as the process default before `build()`, for example `rustls::crypto::ring::default_provider().install_default()`. Or the host passes its own client with `http_client(...)`. Otherwise `build()` returns `BuildError::NoCryptoProvider`. With both TLS features off, `build()` always needs `http_client(...)`. The rule reads only the features of this crate. It applies also when another crate gives `reqwest` a provider.
+With `default-features = false, features = ["rustls-no-provider"]`, the crate has no rustls provider. The host must install a rustls `CryptoProvider` as the process default before `build()`, for example `rustls::crypto::ring::default_provider().install_default()`. That call needs the second `cargo add` line above, a direct `rustls` dependency (version 0.23) with the `ring` feature. The flag `--no-default-features` keeps aws-lc out. Or the host passes its own client with `http_client(...)`. Otherwise `build()` returns `BuildError::NoCryptoProvider`. With both TLS features off, `build()` always needs `http_client(...)`. The rule reads only the features of this crate. It applies also when another crate gives `reqwest` a provider.
 
 `build()` checks the API key one time. The key is not trimmed. A key with a byte that an HTTP header cannot hold, for example a trailing newline, gives `BuildError::InvalidAuthCredential`. `Debug` writes `<redacted>` for the key, and the auth header is marked sensitive.
 

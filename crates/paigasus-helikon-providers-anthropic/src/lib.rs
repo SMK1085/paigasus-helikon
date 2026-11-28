@@ -25,7 +25,10 @@
 //! it turns on `rustls-aws-lc` and Cargo features only add. With
 //! `default-features = false, features = ["rustls-no-provider"]`, the host
 //! must install a rustls `CryptoProvider` as the process default before
-//! `build()`, or pass its own client with `http_client`. Otherwise `build()`
+//! `build()`, for example `rustls::crypto::ring::default_provider().install_default()`.
+//! That call needs a direct host dependency, `rustls = { version = "0.23",
+//! default-features = false, features = ["ring", "std"] }`, and
+//! `default-features = false` keeps aws-lc out. The host can also pass its own client with `http_client`. Otherwise `build()`
 //! returns [`BuildError::NoCryptoProvider`]. With both TLS features off,
 //! `build()` always needs `http_client`. The key is not trimmed. A key
 //! with a byte that a header cannot hold, for example a trailing newline,
