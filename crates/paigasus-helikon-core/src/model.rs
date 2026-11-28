@@ -792,11 +792,19 @@ impl ModelTurnAccumulator {
 
     /// The names of the accumulated tool calls, in `call_id` order.
     ///
-    /// A call that carries no name gives an empty string.
+    /// A call that carries no name gives an empty string. The blank-id
+    /// bucket gives every name that arrived under the blank `call_id`, so
+    /// parallel blank-id calls keep all of their names.
     pub fn tool_call_names(&self) -> Vec<String> {
         self.tool_accum
-            .values()
-            .map(|accum| accum.name.clone().unwrap_or_default())
+            .iter()
+            .flat_map(|(call_id, accum)| {
+                if call_id.is_empty() && !self.blank_names.is_empty() {
+                    self.blank_names.clone()
+                } else {
+                    vec![accum.name.clone().unwrap_or_default()]
+                }
+            })
             .collect()
     }
 
@@ -1084,6 +1092,19 @@ mod model_turn_tests {
     fn equal_blank_names_count_as_two_calls() {
         let e = run(&[tc("", Some("alpha"), "{}"), tc("", Some("alpha"), "{}")]).unwrap_err();
         assert!(e.contains("2 parallel tool calls"), "{e}");
+    }
+
+    #[test]
+    fn tool_call_names_keep_every_blank_id_name() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        for ev in [
+            tc("", Some("alpha"), ""),
+            tc("", Some("beta"), ""),
+            tc("c1", Some("gamma"), "{}"),
+        ] {
+            acc.observe(&ev);
+        }
+        assert_eq!(acc.tool_call_names(), vec!["alpha", "beta", "gamma"]);
     }
 
     /// Confirmed to FAIL against `main`.
