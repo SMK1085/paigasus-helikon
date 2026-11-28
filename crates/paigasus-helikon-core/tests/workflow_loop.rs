@@ -154,3 +154,30 @@ async fn loop_agent_rejects_resolutions() {
     ));
     assert_eq!(runs.load(Ordering::SeqCst), 0, "no child ran");
 }
+
+#[tokio::test]
+async fn cancelled_child_ends_loop_with_no_terminal() {
+    let token = paigasus_helikon_core::CancellationToken::new();
+    token.cancel();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let r = runs.clone();
+    let child = MockAgent::new("child", move |_| {
+        r.fetch_add(1, Ordering::SeqCst);
+        vec![common::assistant_msg("child", "partial")]
+    });
+    let la = LoopAgent::new("loop", "", 3).then(child);
+    let events: Vec<AgentEvent> = futures_util::StreamExt::collect(
+        la.run(
+            RunContext::ephemeral(()).with_cancel(token),
+            AgentInput::from_user_text("go"),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert!(
+        !events.iter().any(AgentEvent::is_terminal),
+        "a cancelled run ends with no terminal event"
+    );
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "exactly one iteration ran");
+}

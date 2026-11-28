@@ -150,3 +150,60 @@ async fn sequential_agent_rejects_resolutions() {
     ));
     assert_eq!(runs.load(Ordering::SeqCst), 0, "no child ran");
 }
+
+fn cancelled_ctx() -> RunContext<()> {
+    let token = paigasus_helikon_core::CancellationToken::new();
+    token.cancel();
+    RunContext::ephemeral(()).with_cancel(token)
+}
+
+#[tokio::test]
+async fn cancelled_child_ends_sequence_with_no_terminal() {
+    let second_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let s = second_runs.clone();
+    let first = MockAgent::new("first", |_| vec![common::assistant_msg("first", "partial")]);
+    let second = MockAgent::new("second", move |_| {
+        s.fetch_add(1, Ordering::SeqCst);
+        vec![common::assistant_msg("second", "partial")]
+    });
+    let seq = SequentialAgent::new("seq", "").then(first).then(second);
+    let events: Vec<AgentEvent> = futures_util::StreamExt::collect(
+        seq.run(cancelled_ctx(), AgentInput::from_user_text("go"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        !events.iter().any(AgentEvent::is_terminal),
+        "a cancelled run ends with no terminal event"
+    );
+    assert_eq!(second_runs.load(Ordering::SeqCst), 0, "second did not run");
+}
+
+/// Regression guard: a child with no terminal event and no cancel still lets
+/// the sequence continue and complete.
+#[tokio::test]
+async fn child_without_terminal_and_without_cancel_keeps_running() {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (r1, r2) = (runs.clone(), runs.clone());
+    let first = MockAgent::new("first", move |_| {
+        r1.fetch_add(1, Ordering::SeqCst);
+        vec![common::assistant_msg("first", "partial")]
+    });
+    let second = MockAgent::new("second", move |_| {
+        r2.fetch_add(1, Ordering::SeqCst);
+        vec![common::assistant_msg("second", "partial")]
+    });
+    let seq = SequentialAgent::new("seq", "").then(first).then(second);
+    let events: Vec<AgentEvent> = futures_util::StreamExt::collect(
+        seq.run(ctx(), AgentInput::from_user_text("go"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunCompleted { .. })
+    ));
+    assert_eq!(runs.load(Ordering::SeqCst), 2, "both children ran");
+}

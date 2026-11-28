@@ -241,6 +241,7 @@ where
             let mut finals: Vec<Option<String>> = vec![None; n];
             let mut skipped = vec![false; n];
             let mut failed_nodes: Vec<usize> = Vec::new();
+            let mut terminal_seen = vec![false; n];
             let mut failures: Vec<Option<crate::FailureSlot>> = vec![None; n];
             let mut total = TokenUsage::default();
             let mut running = futures_util::stream::SelectAll::new();
@@ -291,6 +292,7 @@ where
                 let Some((i, ev)) = running.next().instrument(span.clone()).await else {
                     break;
                 };
+                terminal_seen[i] |= ev.is_terminal();
                 match ev {
                     AgentEvent::RunStarted { .. } => {}
                     AgentEvent::MessageOutput { item } => {
@@ -330,6 +332,16 @@ where
                     }
                     other => yield other,
                 }
+            }
+
+            // Same rule as `AgentAsTool`: a cancelled node with no terminal
+            // event ends this run with no terminal event too. A node whose
+            // stream had no terminal event never readies its successors, so
+            // none of them started.
+            if ctx.cancel().is_cancelled()
+                && (0..n).any(|i| failures[i].is_some() && !terminal_seen[i] && !failed_nodes.contains(&i))
+            {
+                return;
             }
 
             if !failed_nodes.is_empty() {
