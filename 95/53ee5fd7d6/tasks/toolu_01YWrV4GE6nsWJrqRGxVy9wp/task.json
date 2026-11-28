@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YWrV4GE6nsWJrqRGxVy9wp",
+  "agent_id": "a9605eb2d78a23c65",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 3: resume batch check",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 73091,
+    "cache_read_tokens": 1262010,
+    "output_tokens": 6701,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-28T16:07:25.124639+01:00",
+  "completed_at": "2026-11-28T16:08:31.095938+01:00"
+}
