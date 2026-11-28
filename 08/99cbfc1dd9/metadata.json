@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "0899cbfc1dd9",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-869-a-cancelled-run-ends-as-completed-with-cut",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docs/book/src/concepts/agent-loop.md",
+    "docs/book/src/concepts/observability-evaluation.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/08/99cbfc1dd9/0/metadata.json",
+      "transcript": "/08/99cbfc1dd9/0/full.jsonl",
+      "compact_transcript": "/08/99cbfc1dd9/0/transcript.jsonl",
+      "content_hash": "/08/99cbfc1dd9/0/content_hash.txt",
+      "prompt": "/08/99cbfc1dd9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 13446,
+    "cache_read_tokens": 2738120,
+    "output_tokens": 6348,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 108,
+      "cache_creation_tokens": 374211,
+      "cache_read_tokens": 6582229,
+      "output_tokens": 40939,
+      "api_call_count": 54
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 91,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 91,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

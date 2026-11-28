@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XCcrE97h3kJ4V7btJbPZt7",
+  "agent_id": "a055cc246786fd3d2",
+  "subagent_type": "general-purpose",
+  "task_description": "Final whole-branch review SMA-869",
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 202496,
+    "cache_read_tokens": 5182163,
+    "output_tokens": 30170,
+    "api_call_count": 36
+  },
+  "started_at": "2026-11-28T16:21:25.839475+01:00",
+  "completed_at": "2026-11-28T16:27:21.698213+01:00"
+}
