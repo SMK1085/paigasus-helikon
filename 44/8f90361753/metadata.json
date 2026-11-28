@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "448f90361753",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-869-a-cancelled-run-ends-as-completed-with-cut",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-runtime-tokio/tests/cancel_boundaries.rs",
+    "crates/paigasus-helikon-runtime-tokio/tests/common/mod.rs",
+    "crates/paigasus-helikon-runtime-tokio/tests/run_control.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/8f90361753/0/metadata.json",
+      "transcript": "/44/8f90361753/0/full.jsonl",
+      "compact_transcript": "/44/8f90361753/0/transcript.jsonl",
+      "content_hash": "/44/8f90361753/0/content_hash.txt",
+      "prompt": "/44/8f90361753/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 14290,
+    "cache_read_tokens": 1634045,
+    "output_tokens": 3995,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 110711,
+      "cache_read_tokens": 1724149,
+      "output_tokens": 11805,
+      "api_call_count": 19
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 33,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 33,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
