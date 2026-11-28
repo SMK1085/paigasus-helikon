@@ -1248,6 +1248,12 @@ where
                 for ev in events {
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
+                            // A token that fired before this turn must not start it:
+                            // no checkpoint, no span, no hook. `TurnStarted` is not
+                            // yielded; the runner's interrupt ends the run as `Cancelled`.
+                            if ctx.cancel().is_cancelled() {
+                                return;
+                            }
                             // SMA-804: turn-boundary checkpoint. The batch that
                             // closes a tool turn and opens the next model turn
                             // is the boundary; the checkpoint runs before the
@@ -1582,6 +1588,10 @@ where
                         };
                     }
                     crate::NextAction::ExecuteTools { calls } => {
+                        // A token that fired before the tools run must not start them.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let tool_ctx = ctx.to_tool_context();
                         let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
                         let (results, denied) = run_tools_concurrent(
@@ -1650,6 +1660,10 @@ where
                         return;
                     }
                     crate::NextAction::Handoff => {
+                        // A token that fired before the handoff must not start it.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let (target, transcript, parent_usage) = match loop_state {
                             crate::LoopState::ApplyingHandoff {
                                 target,
