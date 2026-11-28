@@ -48,14 +48,14 @@
     "subagent_tokens_complete": true
   },
   "redaction": {
-    "replacements": 119,
+    "replacements": 123,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
       "credentialed_uri": 0,
-      "entropy": 119,
+      "entropy": 123,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
@@ -206,6 +206,37 @@
       "collapse": {
         "target": "tool_pair",
         "label": "Skill: feature-factory:local-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015dS7Eqj3oKrAZLnRDUuH8X",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4aaa39b00bce",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1815,
+        "end": 1816,
+        "entry_ids": [
+          "d267a087-91b7-4d79-b19a-bc47ee43e048"
+        ],
+        "tool_use_id": "toolu_015dS7Eqj3oKrAZLnRDUuH8X"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015dS7Eqj3oKrAZLnRDUuH8X"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
         "default_collapsed": true
       }
     }
