@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.9.7...paigasus-helikon-v0.10.0) - 2026-11-27
+
+### Other
+
+- *(release)* SMA-868 move to `paigasus-helikon-providers-anthropic` 0.4 and `paigasus-helikon-runtime-agentcore` 0.5
+- [**breaking**] The `anthropic` feature re-exports `paigasus-helikon-providers-anthropic` 0.4, and the `runtime-agentcore` feature re-exports `paigasus-helikon-runtime-agentcore` 0.5. Their types are new types. The facade's own API does not change.
+
+### Upgrade notes
+
+- Change your `paigasus-helikon` requirement to `0.10`.
+- Read the `paigasus-helikon-providers-anthropic` 0.4.0 upgrade notes.
+- If your `Cargo.toml` also requires other `paigasus-helikon-*` crates directly, move them to the versions that this release uses. Run `cargo tree -d` to find two copies of one crate.
+
 ## [0.9.7](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.9.6...paigasus-helikon-v0.9.7) - 2026-11-26
 
 ### Other

@@ -520,7 +520,8 @@ pub enum ResponseFormat {
 /// retries on these — retries are an application-layer concern. Wrap a
 /// [`Model`] in `RetryingModel` (with a `RetryPolicy`) from
 /// `paigasus-helikon-runtime-tokio` to retry the transient variants
-/// (`Unavailable`, `RateLimited`, `Transport`) with backoff.
+/// (`Unavailable`, `RateLimited`, `Transport`) with backoff. `Rejected` is not
+/// transient: `RetryingModel` does not retry it.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ModelError {
@@ -547,6 +548,19 @@ pub enum ModelError {
         reason: String,
     },
 
+    /// The provider rejected the request with a non-retryable HTTP 4xx status.
+    /// The same request fails again in the same way, so do not retry it.
+    #[error("{}: {message}", rejected_head(*status, error_type))]
+    Rejected {
+        /// The HTTP status, for example 401.
+        status: u16,
+        /// The provider's error type, for example `authentication_error`.
+        /// Empty when the response body has no error type.
+        error_type: String,
+        /// The provider's error message.
+        message: String,
+    },
+
     /// Transport-level failure (DNS, TLS, socket reset). The string is
     /// provider-formatted.
     #[error("transport error: {0}")]
@@ -555,6 +569,16 @@ pub enum ModelError {
     /// Escape hatch for arbitrary upstream failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// The `request rejected (...)` prefix of [`ModelError::Rejected`]. It leaves
+/// out the error type when that is empty.
+fn rejected_head(status: u16, error_type: &str) -> String {
+    if error_type.is_empty() {
+        format!("request rejected (HTTP {status})")
+    } else {
+        format!("request rejected (HTTP {status} {error_type})")
+    }
 }
 
 // ── Model-turn accumulation ─────────────────────────────────────────────────
@@ -1105,6 +1129,29 @@ mod model_turn_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejected_display_names_status_type_and_message() {
+        let e = ModelError::Rejected {
+            status: 401,
+            error_type: "authentication_error".to_owned(),
+            message: "invalid x-api-key".to_owned(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "request rejected (HTTP 401 authentication_error): invalid x-api-key"
+        );
+    }
+
+    #[test]
+    fn rejected_display_omits_an_empty_error_type() {
+        let e = ModelError::Rejected {
+            status: 400,
+            error_type: String::new(),
+            message: "bad request".to_owned(),
+        };
+        assert_eq!(e.to_string(), "request rejected (HTTP 400): bad request");
+    }
+
     use super::*;
 
     #[test]

@@ -1,7 +1,9 @@
 //! [`AnthropicModelBuilder`] — fluent constructor for [`crate::AnthropicModel`].
 
 use paigasus_helikon_core::ModelCapabilities;
+use reqwest::header::HeaderValue;
 use reqwest::Url;
+use std::fmt;
 
 use crate::capabilities::{self, ModelEntry};
 use crate::settings::{CacheStrategy, Effort, ExtendedThinking};
@@ -26,13 +28,61 @@ pub enum BuildError {
     /// resolved to an empty (or whitespace-only) string.
     #[error("auth credential cannot be empty")]
     EmptyAuthCredential,
+    /// The auth credential contains a byte that an HTTP header value cannot
+    /// hold (for example a newline). The text does not contain the credential.
+    #[error("auth credential contains a byte that is not valid in an HTTP header")]
+    InvalidAuthCredential,
+    /// `build()` had to make its own HTTP client, but no TLS crypto provider is
+    /// available. With `rustls-aws-lc` off, `build()` needs either the
+    /// `rustls-no-provider` feature plus an installed rustls process default,
+    /// or a client passed with `http_client`. With both features off,
+    /// `build()` always needs `http_client`.
+    #[error("no TLS crypto provider: with `rustls-aws-lc` off, enable `rustls-no-provider` and install a rustls CryptoProvider before build(), or pass http_client()")]
+    NoCryptoProvider,
+    /// reqwest could not build the default HTTP client.
+    #[error("cannot build the HTTP client: {0}")]
+    HttpClient(String),
 }
 
-#[derive(Debug, Clone)]
+/// Make the default HTTP client. With `rustls-aws-lc` off, a rustls process
+/// default must exist, or the call returns [`BuildError::NoCryptoProvider`].
+fn default_http_client() -> Result<reqwest::Client, BuildError> {
+    #[cfg(all(feature = "rustls-no-provider", not(feature = "rustls-aws-lc")))]
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        return Err(BuildError::NoCryptoProvider);
+    }
+    #[cfg(not(any(feature = "rustls-no-provider", feature = "rustls-aws-lc")))]
+    return Err(BuildError::NoCryptoProvider);
+    #[cfg(any(feature = "rustls-no-provider", feature = "rustls-aws-lc"))]
+    reqwest::Client::builder()
+        // Another crate can turn on `reqwest/native-tls`, and then the default backend is not rustls.
+        .tls_backend_rustls()
+        .build()
+        .map_err(|e| BuildError::HttpClient(e.to_string()))
+}
+
+#[derive(Clone)]
 enum AuthSource {
     Env,
     ApiKey(String),
     Bearer(String),
+}
+
+// Hand-written so that no credential reaches a `Debug` text.
+impl fmt::Debug for AuthSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Env => f.write_str("Env"),
+            Self::ApiKey(_) => f
+                .debug_tuple("ApiKey")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+            Self::Bearer(_) => f
+                .debug_tuple("Bearer")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+        }
+    }
 }
 
 /// Resolved configuration handed off to [`crate::AnthropicModel`].
@@ -53,11 +103,35 @@ pub(crate) struct Config {
     pub(crate) http: reqwest::Client,
 }
 
-/// One of `x-api-key: <key>` or `authorization: Bearer <token>`.
-#[derive(Debug, Clone)]
+/// One of `x-api-key: <key>` or `authorization: Bearer <token>`. The value is
+/// checked once in `build_config` and marked sensitive.
+#[derive(Clone)]
 pub(crate) enum AuthHeader {
-    ApiKey(String),
-    Bearer(String),
+    ApiKey(HeaderValue),
+    Bearer(HeaderValue),
+}
+
+// Hand-written so that no credential reaches a `Debug` text.
+impl fmt::Debug for AuthHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ApiKey(_) => f
+                .debug_tuple("ApiKey")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+            Self::Bearer(_) => f
+                .debug_tuple("Bearer")
+                .field(&format_args!("<redacted>"))
+                .finish(),
+        }
+    }
+}
+
+/// Make a sensitive header value, or fail without the credential in the error.
+fn sensitive_value(text: &str) -> Result<HeaderValue, BuildError> {
+    let mut v = HeaderValue::from_str(text).map_err(|_| BuildError::InvalidAuthCredential)?;
+    v.set_sensitive(true);
+    Ok(v)
 }
 
 /// Fluent builder for [`crate::AnthropicModel`].
@@ -126,7 +200,8 @@ impl AnthropicModelBuilder {
         self
     }
 
-    /// Use a caller-provided `reqwest::Client`.
+    /// Use a caller-provided `reqwest::Client`. Under `rustls-no-provider`, a
+    /// caller client skips the crypto-provider check.
     pub fn http_client(mut self, c: reqwest::Client) -> Self {
         self.http_client = Some(c);
         self
@@ -186,19 +261,19 @@ impl AnthropicModelBuilder {
                 if key.trim().is_empty() {
                     return Err(BuildError::EmptyAuthCredential);
                 }
-                AuthHeader::ApiKey(key)
+                AuthHeader::ApiKey(sensitive_value(&key)?)
             }
             AuthSource::ApiKey(k) => {
                 if k.trim().is_empty() {
                     return Err(BuildError::EmptyAuthCredential);
                 }
-                AuthHeader::ApiKey(k.clone())
+                AuthHeader::ApiKey(sensitive_value(k)?)
             }
             AuthSource::Bearer(t) => {
                 if t.trim().is_empty() {
                     return Err(BuildError::EmptyAuthCredential);
                 }
-                AuthHeader::Bearer(t.clone())
+                AuthHeader::Bearer(sensitive_value(&format!("Bearer {t}"))?)
             }
         };
 
@@ -228,7 +303,10 @@ impl AnthropicModelBuilder {
             Some(betas.join(","))
         };
 
-        let http = self.http_client.unwrap_or_default();
+        let http = match self.http_client {
+            Some(c) => c,
+            None => default_http_client()?,
+        };
 
         Ok(Config {
             model_id: self.model_id,
@@ -257,6 +335,7 @@ mod tests {
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     fn env_lock() -> &'static Mutex<()> {
+        crate::test_support::install_crypto_provider();
         ENV_LOCK.get_or_init(|| Mutex::new(()))
     }
 
@@ -437,6 +516,17 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_5_uses_its_known_row() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(Some("sk-x"));
+        let c = AnthropicModelBuilder::new("claude-sonnet-5-5")
+            .build_config()
+            .unwrap();
+        restore_env(prev);
+        assert_eq!(c.max_output_default, 32_768);
+    }
+
+    #[test]
     fn unknown_model_uses_conservative_max_output_default() {
         let _g = env_lock().lock().unwrap();
         let prev = save_and_set_env(Some("sk-x"));
@@ -476,5 +566,82 @@ mod tests {
         let r = AnthropicModelBuilder::new("claude-sonnet-4-6").build_config();
         restore_env(prev);
         assert!(matches!(r, Err(BuildError::EmptyAuthCredential)));
+    }
+
+    #[test]
+    fn debug_of_builder_redacts_api_key() {
+        let _g = env_lock().lock().unwrap();
+        let text = format!(
+            "{:?}",
+            AnthropicModelBuilder::new("claude-sonnet-4-6").api_key("sk-secret-868")
+        );
+        assert!(!text.contains("sk-secret-868"), "{text}");
+        assert!(text.contains("ApiKey(<redacted>)"), "{text}");
+    }
+
+    #[test]
+    fn debug_of_builder_redacts_bearer() {
+        let _g = env_lock().lock().unwrap();
+        let text = format!(
+            "{:?}",
+            AnthropicModelBuilder::new("claude-sonnet-4-6").bearer("tok-secret-868")
+        );
+        assert!(!text.contains("tok-secret-868"), "{text}");
+        assert!(text.contains("Bearer(<redacted>)"), "{text}");
+    }
+
+    #[test]
+    fn debug_of_config_redacts_key() {
+        let _g = env_lock().lock().unwrap();
+        let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-secret-868")
+            .build_config()
+            .unwrap();
+        let text = format!("{cfg:?}");
+        assert!(!text.contains("sk-secret-868"), "{text}");
+    }
+
+    #[test]
+    fn api_key_with_newline_errors_invalid_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-a\nb")
+            .build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::InvalidAuthCredential)));
+    }
+
+    #[test]
+    fn bearer_with_nul_errors_invalid_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .bearer("tok\0x")
+            .build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::InvalidAuthCredential)));
+    }
+
+    #[test]
+    fn env_key_with_carriage_return_errors_invalid_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(Some("sk-env\rx"));
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6").build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::InvalidAuthCredential)));
+    }
+
+    #[test]
+    fn invalid_auth_credential_text_has_no_key() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-secret\n868")
+            .build_config();
+        restore_env(prev);
+        let err = r.expect_err("expected an error");
+        assert!(!format!("{err}").contains("sk-secret"));
+        assert!(!format!("{err:?}").contains("sk-secret"));
     }
 }

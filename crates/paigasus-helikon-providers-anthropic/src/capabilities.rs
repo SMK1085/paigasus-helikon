@@ -328,6 +328,32 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_5_row_matches_the_recorded_capabilities() {
+        let e = lookup("claude-sonnet-5-5");
+        assert!(e.caps.streaming);
+        assert!(e.caps.tools);
+        assert!(e.caps.parallel_tool_calls);
+        assert!(e.caps.vision);
+        assert!(e.caps.reasoning);
+        assert!(e.caps.prompt_caching);
+        assert!(e.caps.structured_output);
+        assert_eq!(e.max_output_default, 32_768);
+    }
+
+    #[test]
+    fn opus_5_5_row_matches_the_recorded_capabilities() {
+        let e = lookup("claude-opus-5-5");
+        assert!(e.caps.streaming);
+        assert!(e.caps.tools);
+        assert!(e.caps.parallel_tool_calls);
+        assert!(e.caps.vision);
+        assert!(e.caps.reasoning);
+        assert!(e.caps.prompt_caching);
+        assert!(e.caps.structured_output);
+        assert_eq!(e.max_output_default, 32_768);
+    }
+
+    #[test]
     fn unknown_id_falls_through_to_conservative_defaults() {
         let e = lookup("claude-mystery-9000");
         assert!(e.caps.streaming);

@@ -191,6 +191,31 @@ jobs:
       # gating reaches test modules as well, and a build alone would not catch that.
       - run: cargo build -p paigasus-helikon-runtime-agentcore --no-default-features
       - run: cargo test -p paigasus-helikon-runtime-agentcore --no-default-features
+      # SMA-868: paigasus-core installs its own rustls provider (ring) and uses
+      # the anthropic provider with `rustls-no-provider`. Build and test that
+      # combination; every other job builds the provider with --all-features only.
+      - run: cargo build -p paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider
+      # Both TLS features off must still build; build() then needs http_client.
+      - run: cargo build -p paigasus-helikon-providers-anthropic --no-default-features
+      - run: cargo test -p paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider
+      - name: Assert no rustls crypto provider under rustls-no-provider
+        run: |
+          set -euo pipefail
+          for provider in aws-lc-rs ring; do
+            out="$(cargo tree -p paigasus-helikon-providers-anthropic --no-default-features -F rustls-no-provider -e normal --target all -i "$provider")"
+            if [ -n "$out" ]; then
+              echo "::error::$provider is a normal dependency of paigasus-helikon-providers-anthropic under rustls-no-provider (SMA-868)"
+              echo "$out"
+              exit 1
+            fi
+          done
+          # Control: the default graph must contain aws-lc-rs, or the check above proves nothing.
+          out="$(cargo tree -p paigasus-helikon-providers-anthropic -e normal --target all -i aws-lc-rs)"
+          if [ -z "$out" ]; then
+            echo "::error::control failed: the default graph has no aws-lc-rs, so the check cannot detect it"
+            exit 1
+          fi
+          echo "no rustls crypto provider under rustls-no-provider"
       - name: Assert no axum leakage under runtime-actix
         run: |
           if cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qE '(^|[^-])axum v'; then

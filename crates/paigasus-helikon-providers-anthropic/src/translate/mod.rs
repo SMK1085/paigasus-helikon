@@ -198,6 +198,7 @@ mod tests {
     use paigasus_helikon_core::{ContentPart, Item, ModelRequest, ResponseFormat, ToolDef};
 
     fn cfg() -> Config {
+        crate::test_support::install_crypto_provider();
         AnthropicModelBuilder::new("claude-sonnet-4-6")
             .api_key("sk-test")
             .build_config()
@@ -334,6 +335,7 @@ mod tests {
 
     #[test]
     fn last_turn_cache_skips_dropped_blank_user() {
+        crate::test_support::install_crypto_provider();
         let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
             .api_key("sk-test")
             .cache_strategy(crate::settings::CacheStrategy::LastTurn)
@@ -741,6 +743,7 @@ mod tests {
 
     #[test]
     fn public_setter_opt_out_reaches_body() {
+        crate::test_support::install_crypto_provider();
         let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
             .api_key("sk-test")
             .native_tool_types(false)
@@ -771,6 +774,7 @@ mod baseline {
     use paigasus_helikon_core::{ContentPart, Item, ModelRequest};
 
     fn builder() -> AnthropicModelBuilder {
+        crate::test_support::install_crypto_provider();
         AnthropicModelBuilder::new("claude-sonnet-4-6").api_key("sk-test")
     }
 
@@ -962,6 +966,7 @@ mod round_trip {
 
     /// `Adaptive`, because `Disabled` sends no thinking block back.
     fn cfg() -> Config {
+        crate::test_support::install_crypto_provider();
         AnthropicModelBuilder::new("claude-sonnet-4-6")
             .api_key("sk-test")
             .extended_thinking(ExtendedThinking::Adaptive)

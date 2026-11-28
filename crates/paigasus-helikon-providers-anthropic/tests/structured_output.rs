@@ -1,5 +1,7 @@
 //! End-to-end test of `ResponseFormat::JsonSchema` via forced-tool synthesis.
 
+mod common;
+
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelError, ModelEvent,
@@ -80,6 +82,7 @@ async fn json_schema_synthesizes_forced_tool_and_remaps_to_text() {
         .mount(&server)
         .await;
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -138,6 +141,7 @@ async fn json_schema_plus_caller_tool_choice_tool_returns_synchronous_other() {
     let server = MockServer::start().await;
     // No mount needed — the guard fires before the HTTP call.
 
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())
@@ -170,6 +174,7 @@ async fn json_schema_plus_caller_tool_choice_tool_returns_synchronous_other() {
 #[tokio::test]
 async fn reserved_tool_name_returns_synchronous_other() {
     let server = MockServer::start().await;
+    common::install_crypto_provider();
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")
         .base_url(server.uri())

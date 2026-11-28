@@ -17,6 +17,35 @@
 //! # Ok(()) }
 //! ```
 //!
+//! # TLS
+//!
+//! The default feature `rustls-aws-lc` uses the aws-lc rustls provider. The
+//! facade feature `anthropic` uses this default. A host that needs
+//! `rustls-no-provider` must not enable the facade feature `anthropic`, because
+//! it turns on `rustls-aws-lc` and Cargo features only add. With
+//! `default-features = false, features = ["rustls-no-provider"]`, the host
+//! must install a rustls `CryptoProvider` as the process default before
+//! `build()`, for example `rustls::crypto::ring::default_provider().install_default()`.
+//! That call needs a direct host dependency, `rustls = { version = "0.23",
+//! default-features = false, features = ["ring", "std"] }`, and
+//! `default-features = false` keeps aws-lc out. The host can also pass its own client with `http_client`. Otherwise `build()`
+//! returns [`BuildError::NoCryptoProvider`]. With both TLS features off,
+//! `build()` always needs `http_client`. The key is not trimmed. A key
+//! with a byte that a header cannot hold, for example a trailing newline,
+//! gives [`BuildError::InvalidAuthCredential`]. `Debug` writes `<redacted>`
+//! for the key.
+//!
+//! # Errors
+//!
+//! An `invalid_request_error` whose message contains `prompt is too long` maps
+//! to `ModelError::ContextLengthExceeded`; this check comes first. Otherwise
+//! HTTP 400, 401, 403, 404 and 413 map to `ModelError::Rejected` with the
+//! status, the error type and the message. The error type `rate_limit_error`,
+//! and the error type `billing_error` with HTTP 429, map to
+//! `ModelError::RateLimited` with the `retry-after` value. HTTP 500 to 504
+//! and 529 map to `ModelError::Unavailable`. The stop reason `refusal` maps to
+//! `ModelError::Refused`. `RetryingModel` does not retry `Rejected`.
+//!
 //! # Extended thinking in a tool loop
 //!
 //! The stream keeps each `thinking` and `redacted_thinking` block as a
@@ -68,6 +97,8 @@ mod provider_data;
 mod settings;
 mod sse;
 mod stream;
+#[cfg(test)]
+mod test_support;
 mod translate;
 
 pub use builder::{AnthropicModelBuilder, BuildError};
