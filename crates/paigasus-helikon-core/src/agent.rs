@@ -1428,6 +1428,12 @@ where
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {
+                        // A token that fired before this call must not start a model
+                        // call. End the stream with no terminal event, so the runner's
+                        // interrupt wins and the run ends as `Cancelled`.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let mut request = request;
                         for text in pending_injections.drain(..) {
                             request.messages.push(crate::Item::System {
@@ -1453,6 +1459,11 @@ where
                         let mut model_stream = match model.invoke(request, cancel).await {
                             Ok(s) => s,
                             Err(e) => {
+                                // An error that follows a cancel is a result of the
+                                // cancel. End with no terminal event: the run is `Cancelled`.
+                                if ctx.cancel().is_cancelled() {
+                                    return;
+                                }
                                 let msg = e.to_string();
                                 chat_span.record("otel.status_code", "ERROR");
                                 run_span.record("otel.status_code", "ERROR");
@@ -1492,6 +1503,11 @@ where
                                     }
                                 }
                                 Err(e) => {
+                                    // A stream error that follows a cancel is a result of
+                                    // the cancel. End with no terminal event.
+                                    if ctx.cancel().is_cancelled() {
+                                        return;
+                                    }
                                     let msg = e.to_string();
                                     chat_span.record("otel.status_code", "ERROR");
                                     run_span.record("otel.status_code", "ERROR");
@@ -1506,6 +1522,11 @@ where
                         let cut_reason = acc.finish_reason().clone();
                         let cut_names = acc.tool_call_names();
                         let finish_seen = acc.finish_seen();
+                        // A stream that ends with no `Finish` after a cancel is a cut
+                        // turn. Do not store it. End with no terminal event.
+                        if !finish_seen && ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
                             Ok(turn) => turn,
                             Err(e) => {

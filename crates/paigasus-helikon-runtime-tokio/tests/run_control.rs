@@ -6,14 +6,15 @@ mod common;
 use std::time::Duration;
 
 use paigasus_helikon_core::{
-    AgentInput, CancellationToken, Hook, RunConfig, RunError, Runner, Session,
+    AgentInput, CancellationToken, FinishReason, Hook, ModelEvent, RunConfig, RunError, Runner,
+    Session,
 };
 use paigasus_helikon_runtime_tokio::TokioRunner;
 
 use common::{
     run_context_with_cancel, run_context_with_cancel_and_hooks, run_context_with_session,
-    run_context_with_session_and_cancel, text_agent, CancelOnRunCompleteHook, CountingSession,
-    MockModel, PendingModel,
+    run_context_with_session_and_cancel, text_agent, CancelOnRunCompleteHook, CancelScriptModel,
+    CountingSession, MockModel, PendingModel, Step,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -62,14 +63,23 @@ async fn timeout_returns_timeout() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn prefired_cancel_still_completes_ready_run() {
-    // Token already fired before the run starts; the run drains to completion,
-    // a RunCompleted terminal is observed, and the cancel cannot override it
-    // (SMA-421: a genuine terminal wins over any cancel/timeout).
+async fn prefired_cancel_ends_cancelled_without_a_model_call() {
+    // A token that fired before the run starts is not "a terminal that already
+    // happened", so SMA-421 does not apply. The run ends as `Cancelled` and
+    // never calls the model.
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let ctx = run_context_with_cancel(cancel);
-    let agent = text_agent(MockModel::quick_hi(), Vec::new());
+    let ctx = run_context_with_cancel(cancel.clone());
+    let model = CancelScriptModel::new(
+        cancel,
+        vec![vec![
+            Step::Emit(ModelEvent::TokenDelta { text: "hi".into() }),
+            Step::Emit(ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            }),
+        ]],
+    );
+    let agent = text_agent(model.clone(), Vec::new());
 
     let res = TokioRunner
         .run(
@@ -79,11 +89,8 @@ async fn prefired_cancel_still_completes_ready_run() {
             RunConfig::default(),
         )
         .await;
-    assert!(
-        res.is_ok(),
-        "ready run must complete despite a fired token: {res:?}"
-    );
-    assert_eq!(res.unwrap().final_output, "hi");
+    assert!(matches!(res, Err(RunError::Cancelled)), "got {res:?}");
+    assert_eq!(model.calls(), 0, "a fired token must stop the model call");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
