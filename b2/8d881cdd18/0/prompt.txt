@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bvw33q661</task-id>
+<tool-use-id>toolu_01394q1yrace2wSnx1DDtdYC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/173218de-ef1d-4f01-8e75-351491cd9f9d/tasks/bvw33q661.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CodeRabbit to finish its first review" completed (exit code 0)</summary>
+</task-notification>
