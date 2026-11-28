@@ -166,6 +166,10 @@ async fn model_stream_error_after_cancel_is_cancelled() {
 }
 
 /// A cancel after `Finish` must not undo a turn that already ended (goal 12).
+///
+/// This test is deterministic only while nothing returns `Pending` between the
+/// end of the stream and `RunCompleted`. A later async step there lets the
+/// cancel win. The failure then looks like a regression of check 6.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_after_finish_still_completes() {
     let token = CancellationToken::new();
@@ -271,6 +275,19 @@ impl Hook<()> for CancelAfterToolHook {
     }
 }
 
+/// Fires the run token when the first turn starts.
+struct CancelOnTurnStartHook;
+
+#[async_trait]
+impl Hook<()> for CancelOnTurnStartHook {
+    async fn on_event(&self, ctx: &RunContext<()>, event: &HookEvent) -> HookDecision {
+        if matches!(event, HookEvent::OnTurnStart { .. }) {
+            ctx.cancel().cancel();
+        }
+        HookDecision::Allow
+    }
+}
+
 /// Counts `at_boundary` calls.
 struct CountingCheckpoint {
     calls: AtomicUsize,
@@ -301,6 +318,9 @@ fn late_text_turn() -> Vec<Step> {
     vec![delta("late"), finish()]
 }
 
+/// Check 2 (at `TurnStarted`) stops this run before the second model call.
+/// The tool-results batch holds `TurnStarted`. The test fails on `main`:
+/// there the second turn starts and `model.calls()` is 2.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_between_turns_makes_no_second_model_call() {
     let token = CancellationToken::new();
@@ -353,7 +373,28 @@ async fn cancel_between_turns_skips_the_turn_checkpoint() {
     );
 }
 
-/// Guard: check 3 (no model call on a fired token) already covers this case.
+/// A cancel in the `OnTurnStart` hook fires after check 2 passed. Check 3 (at
+/// the model call) alone stops this run, so the model gets no call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_in_turn_start_hook_makes_no_model_call() {
+    let token = CancellationToken::new();
+    let model = CancelScriptModel::new(token.clone(), vec![late_text_turn()]);
+    let agent = text_agent(model.clone(), Vec::new());
+    let ctx = run_context_with_cancel_and_hooks(token, vec![Arc::new(CancelOnTurnStartHook)]);
+    let res = TokioRunner
+        .run(
+            &agent,
+            ctx,
+            AgentInput::from_user_text("go"),
+            RunConfig::default(),
+        )
+        .await;
+    assert!(matches!(res, Err(RunError::Cancelled)), "got {res:?}");
+    assert_eq!(model.calls(), 0);
+}
+
+/// Check 2 (at `TurnStarted`) stops this run before the second model call.
+/// This is not a guard: the test fails on `main`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_while_a_tool_runs_is_cancelled() {
     let token = CancellationToken::new();

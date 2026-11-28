@@ -278,6 +278,11 @@ async fn cancelled_node_ends_graph_with_no_terminal() {
     assert_eq!(b_runs.load(Ordering::SeqCst), 0, "b did not run");
 }
 
+// This test depends on three facts. `SelectAll` polls the node streams in FIFO
+// order. The node `cut` is declared before `done`. The stream of `cut` yields
+// fewer events than the stream of `done`. So the end marker of `cut` comes
+// before the `RunCompleted` of `done`. If the order changes, `succ` starts and
+// the test fails. A `futures-util` update can change the poll order.
 #[tokio::test]
 async fn cancelled_root_stops_graph_before_sibling_successor_starts() {
     use std::sync::atomic::{AtomicUsize, Ordering};

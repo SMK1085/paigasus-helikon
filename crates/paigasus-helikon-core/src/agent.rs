@@ -1454,6 +1454,8 @@ where
                         // A token that fired before this call must not start a model
                         // call. End the stream with no terminal event, so the runner's
                         // interrupt wins and the run ends as `Cancelled`.
+                        // This check covers a cancel from the `OnTurnStart` hook and the repair
+                        // turn, which has no `TurnStarted`. It is also defence in depth.
                         if ctx.cancel().is_cancelled() {
                             return;
                         }
