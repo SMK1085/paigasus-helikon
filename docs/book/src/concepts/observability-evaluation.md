@@ -345,7 +345,7 @@ script, so "one script per `invoke`" holds regardless of cancellation timing.
 Through an agent, the loop makes no `invoke` for a turn that starts after the
 cancel. That turn uses no script.
 
-A cancel ends the run. When the model stream ends with no `Finish` event and
+A cancel before a terminal event ends the run. When the model stream ends with no `Finish` event and
 the token fired, the loop emits no terminal event. A runner then reports
 `RunError::Cancelled`. No tool call of a cut turn runs. This is true also when
 the cut lands on a complete argument string.
