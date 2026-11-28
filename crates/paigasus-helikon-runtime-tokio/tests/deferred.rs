@@ -1347,6 +1347,45 @@ async fn deferral_with_the_call_id_of_a_transfer_call_defers() {
 }
 
 #[tokio::test]
+async fn prefired_cancel_on_handoff_resume_runs_no_approved_call() {
+    let session = handoff_session().await;
+    let pay = PayTool::new();
+    let budgeting = pay_agent(
+        "budgeting",
+        RequestLog::with_scripts(vec![text_turn("never")]),
+        &pay,
+    );
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RequestLog::with_scripts(vec![]))
+        .handoff(budgeting)
+        .build();
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let ctx = ctx(session.clone(), true).with_cancel(cancel);
+
+    let mut stream = TokioRunner
+        .run_streamed(&triage, ctx, input, RunConfig::default())
+        .await
+        .expect("stream starts")
+        .events;
+    let mut events = Vec::new();
+    while let Some(ev) = stream.next().await {
+        events.push(ev);
+    }
+
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::AgentUpdated { .. })),
+        "the parent hands off no run after a cancel: {events:?}"
+    );
+    assert_eq!(pay.calls().len(), 0);
+    assert!(open_ids(&session).await.is_empty());
+}
+
+#[tokio::test]
 async fn deferral_with_a_unique_call_id_after_a_handoff_still_defers() {
     let (result, session, pay, child_model) = handoff_run_with_ids("t1", "fc_0").await;
 
