@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ANqWttpFN1uFE9UL6QFzJk",
+  "agent_id": "adfc5f12c855b6753",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 5: AgentAsTool + MCP",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 68948,
+    "cache_read_tokens": 993382,
+    "output_tokens": 5861,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-28T16:16:45.628235+01:00",
+  "completed_at": "2026-11-28T16:18:12.974559+01:00"
+}
