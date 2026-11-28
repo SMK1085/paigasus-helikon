@@ -404,9 +404,13 @@ impl StreamTranslator {
                     })
                 }
             }
-            StopReason::MaxTokens => Ok(ModelEvent::Finish {
-                reason: FinishReason::Length,
-            }),
+            // The context window limit cuts the output like `max_tokens`
+            // (SMA-864).
+            StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => {
+                Ok(ModelEvent::Finish {
+                    reason: FinishReason::Length,
+                })
+            }
             StopReason::GuardrailIntervened | StopReason::ContentFiltered => {
                 Ok(ModelEvent::Finish {
                     reason: FinishReason::ContentFilter,
@@ -812,9 +816,10 @@ mod tests {
         ));
     }
 
-    /// ModelContextWindowExceeded → Finish(Other("model_context_window_exceeded")).
+    /// ModelContextWindowExceeded → Finish(Length): the output is cut at the
+    /// context window limit (SMA-864).
     #[test]
-    fn model_context_window_exceeded_maps_to_other() {
+    fn model_context_window_exceeded_maps_to_length() {
         let events = vec![
             message_stop(StopReason::ModelContextWindowExceeded),
             metadata(5, 0, None),
@@ -822,10 +827,26 @@ mod tests {
         let out = run(false, events);
         assert!(matches!(
             out.last().unwrap().as_ref().unwrap(),
-            ModelEvent::Finish {
-                reason: FinishReason::Other(s)
-            } if s == "model_context_window_exceeded"
+            ModelEvent::Finish { reason } if *reason == FinishReason::Length
         ));
+    }
+
+    /// The malformed stop reasons are not a cut or a filter, so they stay in
+    /// `Other` (SMA-864 sweep).
+    #[test]
+    fn malformed_stop_reasons_stay_other() {
+        for (wire, raw) in [
+            (StopReason::MalformedModelOutput, "malformed_model_output"),
+            (StopReason::MalformedToolUse, "malformed_tool_use"),
+        ] {
+            let out = run(false, vec![message_stop(wire), metadata(5, 0, None)]);
+            assert!(matches!(
+                out.last().unwrap().as_ref().unwrap(),
+                ModelEvent::Finish {
+                    reason: FinishReason::Other(s)
+                } if s == raw
+            ));
+        }
     }
 
     /// synthesizing=true: the synthesized tool's input delta is remapped to TokenDelta.

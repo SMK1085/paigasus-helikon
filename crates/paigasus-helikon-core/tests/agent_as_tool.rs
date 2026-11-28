@@ -194,3 +194,51 @@ async fn agent_as_tool_round_trips_through_parent_loop() {
         "a ToolOutputItem must carry the sub-agent's '42' output"
     );
 }
+
+/// A model that sends one complete tool call, cancels the run, and ends its
+/// stream with no `Finish`, as the `Model` contract says.
+struct CancelAfterCall(CancellationToken);
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::Model for CancelAfterCall {
+    async fn invoke(
+        &self,
+        _request: paigasus_helikon_core::ModelRequest,
+        _cancel: CancellationToken,
+    ) -> Result<
+        futures_core::stream::BoxStream<
+            'static,
+            Result<ModelEvent, paigasus_helikon_core::ModelError>,
+        >,
+        paigasus_helikon_core::ModelError,
+    > {
+        self.0.cancel();
+        Ok(Box::pin(futures_util::stream::iter([Ok(
+            ModelEvent::ToolCallDelta {
+                call_id: "c1".into(),
+                name: Some("search".into()),
+                args_delta: "{}".into(),
+            },
+        )])))
+    }
+
+    fn capabilities(&self) -> paigasus_helikon_core::ModelCapabilities {
+        paigasus_helikon_core::ModelCapabilities::default()
+    }
+}
+
+#[tokio::test]
+async fn agent_as_tool_cancelled_sub_run_is_a_tool_error() {
+    let cancel = CancellationToken::new();
+    let sub = LlmAgent::builder::<()>()
+        .name("sub")
+        .shared_model(Arc::new(CancelAfterCall(cancel.clone())))
+        .build();
+    let tool = AgentAsTool::new(sub);
+    let tc: ToolContext<()> = ToolContext::new(Arc::new(()), TracerHandle::default(), cancel, 0, 8);
+    let err = tool
+        .invoke(&tc, serde_json::json!({ "input": "go" }))
+        .await
+        .expect_err("a cancelled sub-run is not a successful tool result");
+    assert!(err.to_string().contains("cancelled"), "got: {err}");
+}

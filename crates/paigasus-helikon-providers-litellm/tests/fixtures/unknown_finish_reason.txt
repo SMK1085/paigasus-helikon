@@ -2,15 +2,16 @@
 : wire. The `object`, `created` and `model` values match
 : `text_then_trailing_usage.txt`. Its envelope is not recorded as captured.
 : The id of this file is `chatcmpl-3`. No capture or
-: mock run that produced the finish value `guardrail_intervened` is recorded,
+: mock run that produced the finish value `some_future_reason` is recorded,
 : and no other source for that value is recorded. The test uses it as an
-: unknown finish reason.
+: unknown finish reason. SMA-864 changed the value from `guardrail_intervened`,
+: because the translator now maps that value to `ContentFilter`.
 : The final `[DONE]` follows the framing in `text_then_trailing_usage.txt`,
 : which is captured.
 
 data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"hi"}}]}
 
-data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{},"finish_reason":"guardrail_intervened"}]}
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{},"finish_reason":"some_future_reason"}]}
 
 data: [DONE]
 

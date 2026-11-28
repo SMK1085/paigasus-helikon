@@ -48,6 +48,8 @@ pub struct TransitionOutcome {
 
 A typical run walks `CallingModel → ExecutingTools → CallingModel → … → Done`. Each tool round bumps `turn`; reaching `RunConfig::max_turns` fails the run with `AgentError::MaxTurnsExceeded`. With an `output_type` configured, the loop adds a `Finalizing` (and, on a validation miss, one `RepairingOutput`) turn before `Done`. See [Structured Output](./structured-output-builder.md) for that path.
 
+A model turn can end with `FinishReason::Length` or `FinishReason::ContentFilter` and still hold tool calls. The provider cut that turn, so the tool call arguments can be incomplete. The loop fails the run with `AgentError::ToolCallsNotRun`. No tool call and no handoff from that turn runs. A stream that ended early with tool calls and no `Finish` event fails in the same way, with `finish_reason: None`. A custom `Model` must emit `Finish`.
+
 ## The event stream
 
 `Agent::run` returns a `BoxStream<'static, AgentEvent>`. The outer `Result` only covers failure to *start* the stream; a fatal error mid-run arrives as an `AgentEvent::RunFailed` inside the stream, not as an `Err`.
@@ -64,7 +66,7 @@ A typical run walks `CallingModel → ExecutingTools → CallingModel → … �
 - Semantic items (carry a full `Item`): `MessageOutput { item }`, `ToolCallItem { item }`, `ToolOutputItem { item }`, `HandoffItem { from, to }`.
 - Transitions: `AgentUpdated { agent }`.
 - Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments; they are redacted when output redaction is on), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`, `UserMessageInjected { content }`.
-- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint.
+- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint. A cancelled run can end its stream with no terminal event. A runner such as `TokioRunner` reports this as `RunError::Cancelled`. If you wrap the `Agent::run` stream in `RunResultStreaming` with no runner, `RunResultStreaming::collect` returns `Ok`.
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
 

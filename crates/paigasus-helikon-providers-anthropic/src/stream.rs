@@ -464,7 +464,9 @@ impl MessageTranslator {
             "end_turn" | "stop_sequence" => Ok(ModelEvent::Finish {
                 reason: FinishReason::Stop,
             }),
-            "max_tokens" => Ok(ModelEvent::Finish {
+            // `model_context_window_exceeded`: the output stopped at the
+            // context window limit, so it is cut like `max_tokens` (SMA-864).
+            "max_tokens" | "model_context_window_exceeded" => Ok(ModelEvent::Finish {
                 reason: FinishReason::Length,
             }),
             "tool_use" => {
@@ -1405,6 +1407,31 @@ mod tests {
         let deltas = call_deltas(&events);
         assert_eq!(deltas.iter().filter(|d| d.1.is_some()).count(), 1);
         assert_eq!(deltas.len(), 1);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. The Messages API
+    /// documents `model_context_window_exceeded` as a stop at the context
+    /// window limit, so the output is cut and maps to `Length` (SMA-864).
+    #[test]
+    fn model_context_window_exceeded_maps_to_length() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "get_current_time")),
+                stop(0),
+                message_delta("model_context_window_exceeded"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert_eq!(call_deltas(&events).len(), 1);
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::Length
+            })
+        ));
     }
 
     /// HAND-AUTHORED: no capture shows this wire shape. Derived from

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- `CONTINUATION` now maps to `FinishReason::Length` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.
+- `IMAGE_SAFETY` now maps to `FinishReason::ContentFilter` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.
+- `IMAGE_PROHIBITED_CONTENT` now maps to `FinishReason::ContentFilter` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.
+- `IMAGE_RECITATION` now maps to `FinishReason::ContentFilter` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.
+- `ESCALATION` now maps to `FinishReason::ContentFilter` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.
+
 ## [0.3.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-gemini-v0.3.4...paigasus-helikon-providers-gemini-v0.3.5) - 2026-11-22
 
 ### Other

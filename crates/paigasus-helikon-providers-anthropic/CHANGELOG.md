@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- `model_context_window_exceeded` now maps to `FinishReason::Length` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.
+
 ## [0.4.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.6...paigasus-helikon-providers-anthropic-v0.4.0) - 2026-11-27
 
 ### Added

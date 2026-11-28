@@ -1502,13 +1502,48 @@ where
                             }
                         }
 
+                        // Read these before `finish()` consumes the accumulator.
+                        let cut_reason = acc.finish_reason().clone();
+                        let cut_names = acc.tool_call_names();
+                        let finish_seen = acc.finish_seen();
                         let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
                             Ok(turn) => turn,
                             Err(e) => {
+                                // A model MUST NOT emit `Finish` on cancellation. End the
+                                // stream with no terminal event, so the runner's interrupt
+                                // wins and the run ends as `Cancelled`.
+                                if ctx.cancel().is_cancelled() {
+                                    return;
+                                }
                                 chat_span.record("otel.status_code", "ERROR");
                                 run_span.record("otel.status_code", "ERROR");
-                                failure.set(crate::AgentError::Other(anyhow::anyhow!("{e}")));
-                                yield crate::AgentEvent::RunFailed { error: e };
+                                // A cut turn (Length / ContentFilter) can leave partial
+                                // JSON in the tool args. Report that the calls were not
+                                // run, as the state machine does for a complete turn.
+                                // A stream with tool calls and no `Finish` event gets
+                                // `finish_reason: None`; check it first.
+                                let not_run = if !finish_seen {
+                                    Some(None)
+                                } else if matches!(
+                                    cut_reason,
+                                    crate::FinishReason::Length | crate::FinishReason::ContentFilter
+                                ) {
+                                    Some(Some(cut_reason))
+                                } else {
+                                    None
+                                };
+                                if let Some(finish_reason) = not_run {
+                                    let err = crate::AgentError::ToolCallsNotRun {
+                                        finish_reason,
+                                        tool_names: cut_names,
+                                    };
+                                    let msg = err.to_string();
+                                    failure.set(err);
+                                    yield crate::AgentEvent::RunFailed { error: msg };
+                                } else {
+                                    failure.set(crate::AgentError::Other(anyhow::anyhow!("{e}")));
+                                    yield crate::AgentEvent::RunFailed { error: e };
+                                }
                                 return;
                             }
                         };
@@ -1822,9 +1857,36 @@ pub enum AgentError {
         stop_reason: crate::StopReason,
     },
 
+    /// The model turn did not end cleanly (`Length`, `ContentFilter`, or a
+    /// stream with no `Finish`), so the loop did not run its tool calls.
+    #[error("{}", tool_calls_not_run_text(.finish_reason, .tool_names))]
+    #[non_exhaustive]
+    ToolCallsNotRun {
+        /// How the turn ended, or `None` when the stream ended with no
+        /// `Finish` event.
+        finish_reason: Option<crate::FinishReason>,
+        /// Names of the tool calls the loop did not run.
+        tool_names: Vec<String>,
+    },
+
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// Build the `Display` text of [`AgentError::ToolCallsNotRun`].
+fn tool_calls_not_run_text(
+    finish_reason: &Option<crate::FinishReason>,
+    tool_names: &[String],
+) -> String {
+    let ended = match finish_reason {
+        Some(r) => format!("the model turn ended with {r:?}"),
+        None => "the model stream ended with no finish reason".to_string(),
+    };
+    format!(
+        "{ended}, so the tool calls were not run: {}",
+        crate::model::cap_names(tool_names)
+    )
 }
 
 /// Out-of-band carrier for a run's terminal structured [`AgentError`].
@@ -2222,5 +2284,50 @@ mod terminal_tests {
             4,
             "expected exactly RunCompleted + RunFailed + RunDeferred + RunStopped: {terminal:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_calls_not_run_tests {
+    use super::*;
+    use crate::FinishReason;
+
+    fn err(finish_reason: Option<FinishReason>, tool_names: Vec<String>) -> AgentError {
+        AgentError::ToolCallsNotRun {
+            finish_reason,
+            tool_names,
+        }
+    }
+
+    #[test]
+    fn display_names_finish_reason_and_tools() {
+        let text = err(Some(FinishReason::Length), vec!["search".into()]).to_string();
+        assert!(text.contains("Length"), "{text}");
+        assert!(text.contains("search"), "{text}");
+    }
+
+    #[test]
+    fn display_caps_long_name_lists() {
+        let names: Vec<String> = (1..=10).map(|i| format!("tool_{i}_x")).collect();
+        let text = err(Some(FinishReason::Length), names).to_string();
+        assert!(text.contains("tool_8_x"), "{text}");
+        assert!(!text.contains("tool_9_x"), "{text}");
+        let long = err(Some(FinishReason::Length), vec!["a".repeat(100)]).to_string();
+        assert!(long.contains(&"a".repeat(64)), "{long}");
+        assert!(!long.contains(&"a".repeat(65)), "{long}");
+    }
+
+    #[test]
+    fn display_caps_multibyte_name_safely() {
+        let text = err(Some(FinishReason::ContentFilter), vec!["é".repeat(70)]).to_string();
+        assert!(text.contains(&"é".repeat(64)), "{text}");
+        assert!(!text.contains(&"é".repeat(65)), "{text}");
+    }
+
+    #[test]
+    fn display_for_missing_finish() {
+        let text = err(None, vec!["search".into()]).to_string();
+        assert!(text.contains("no finish reason"), "{text}");
+        assert!(text.contains("search"), "{text}");
     }
 }

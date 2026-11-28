@@ -747,7 +747,10 @@ impl ChatTranslator {
             "stop" => FinishReason::Stop,
             "length" => FinishReason::Length,
             "tool_calls" | "function_call" => FinishReason::ToolCalls,
-            "content_filter" => FinishReason::ContentFilter,
+            // `guardrail_intervened` is a Bedrock guardrail block. LiteLLM's
+            // own map gives `content_filter`; accept the raw value too
+            // (SMA-864).
+            "content_filter" | "guardrail_intervened" => FinishReason::ContentFilter,
             other => FinishReason::Other(other.to_owned()),
         };
         out.push(ModelEvent::Finish { reason });
@@ -852,6 +855,12 @@ mod tests {
         let mut acc = paigasus_helikon_core::ModelTurnAccumulator::new("test-agent");
         for e in evs {
             acc.observe(e);
+        }
+        // These event slices end before the stream's own `Finish`.
+        if !acc.finish_seen() {
+            acc.observe(&ModelEvent::Finish {
+                reason: paigasus_helikon_core::FinishReason::ToolCalls,
+            });
         }
         Ok(acc
             .finish()?
@@ -1010,6 +1019,7 @@ mod tests {
             ("tool_calls", FinishReason::ToolCalls),
             ("function_call", FinishReason::ToolCalls),
             ("content_filter", FinishReason::ContentFilter),
+            ("guardrail_intervened", FinishReason::ContentFilter),
         ] {
             let mut t = ChatTranslator::new();
             t.consume(chunk(serde_json::json!({
@@ -1024,12 +1034,12 @@ mod tests {
     fn unknown_finish_reason_lands_in_other() {
         let mut t = ChatTranslator::new();
         t.consume(chunk(serde_json::json!({
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "guardrail_intervened"}]
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "some_future_reason"}]
         })));
         let evs = t.finish();
         match &evs[0] {
             ModelEvent::Finish { reason } => {
-                assert_eq!(*reason, FinishReason::Other("guardrail_intervened".into()));
+                assert_eq!(*reason, FinishReason::Other("some_future_reason".into()));
             }
             other => panic!("expected Finish, got {other:?}"),
         }

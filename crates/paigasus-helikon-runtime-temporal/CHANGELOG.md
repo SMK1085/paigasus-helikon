@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- The core rule that a `Length` or `ContentFilter` turn with tool calls fails the run is replay-breaking for a Temporal run that is in progress. On replay, `transition` fails the run at that turn, so Temporal reports a non-determinism error.
+- Before the upgrade, drain the in-flight runs, or use a blue-green task queue. See "Upgrade Discipline and Determinism" in the crate docs.
+- Such a turn now fails the run with `AgentError::Other`. The text is the text of `AgentError::ToolCallsNotRun`. Before, the runtime ran the tool calls.
+- If the tool call arguments are not complete JSON, or the stream has no `Finish`, the `call_model` activity fails with the reassembly text.
+
 ## [0.7.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.7.2...paigasus-helikon-runtime-temporal-v0.7.3) - 2026-11-22
 
 ### Other
