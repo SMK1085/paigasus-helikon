@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.3.3...paigasus-helikon-runtime-tokio-v0.3.4) - 2026-11-28
+
+### Fixed
+
+- *(core)* SMA-864 do not run tool calls from a cut or filtered model turn ([#406](https://github.com/SMK1085/paigasus-helikon/pull/406))
+
 ### Fixed
 
 - A run now ends with `RunError::Cancelled` when the agent stream ends after the cancel token fired and no terminal event arrived. Before, the run returned `Ok`.
