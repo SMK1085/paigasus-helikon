@@ -273,8 +273,11 @@ where
                     node_input.messages = messages;
 
                     match nodes[i].1.run(child, node_input).instrument(span.clone()).await {
-                        Ok(s) => running.push(Box::pin(s.map(move |ev| (i, ev)))
-                            as BoxStream<'static, (usize, AgentEvent)>),
+                        Ok(s) => running.push(Box::pin(
+                            s.map(move |ev| (i, Some(ev)))
+                                .chain(futures_util::stream::once(async move { (i, None) })),
+                        )
+                            as BoxStream<'static, (usize, Option<AgentEvent>)>),
                         Err(e) => {
                             failed_nodes.push(i);
                             // Record into the node's own slot so the aggregate
@@ -291,6 +294,16 @@ where
 
                 let Some((i, ev)) = running.next().instrument(span.clone()).await else {
                     break;
+                };
+                // `None` marks the end of node `i`'s stream.
+                let Some(ev) = ev else {
+                    // Same rule as `AgentAsTool`: a cancelled node with no
+                    // terminal event ends this run with no terminal event,
+                    // before any successor starts.
+                    if !terminal_seen[i] && ctx.cancel().is_cancelled() {
+                        return;
+                    }
+                    continue;
                 };
                 terminal_seen[i] |= ev.is_terminal();
                 match ev {
@@ -332,16 +345,6 @@ where
                     }
                     other => yield other,
                 }
-            }
-
-            // Same rule as `AgentAsTool`: a cancelled node with no terminal
-            // event ends this run with no terminal event too. A node whose
-            // stream had no terminal event never readies its successors, so
-            // none of them started.
-            if ctx.cancel().is_cancelled()
-                && (0..n).any(|i| failures[i].is_some() && !terminal_seen[i] && !failed_nodes.contains(&i))
-            {
-                return;
             }
 
             if !failed_nodes.is_empty() {

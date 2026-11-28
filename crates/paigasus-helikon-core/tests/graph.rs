@@ -277,3 +277,48 @@ async fn cancelled_node_ends_graph_with_no_terminal() {
     );
     assert_eq!(b_runs.load(Ordering::SeqCst), 0, "b did not run");
 }
+
+#[tokio::test]
+async fn cancelled_root_stops_graph_before_sibling_successor_starts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let token = paigasus_helikon_core::CancellationToken::new();
+    token.cancel();
+    let s_runs = Arc::new(AtomicUsize::new(0));
+    let r = s_runs.clone();
+    let g = GraphAgent::builder()
+        .name("g")
+        .node(
+            "cut",
+            common::MockAgent::new("cut", |_| vec![common::assistant_msg("cut", "partial")]),
+        )
+        .node(
+            "done",
+            common::MockAgent::new("done", |_| common::msg_and_complete("done", "ok", 0)),
+        )
+        .node(
+            "succ",
+            common::MockAgent::new("succ", move |_| {
+                r.fetch_add(1, Ordering::SeqCst);
+                common::msg_and_complete("succ", "ok", 0)
+            }),
+        )
+        .edge("done", "succ")
+        .build()
+        .unwrap();
+    let events: Vec<AgentEvent> = g
+        .run(
+            RunContext::ephemeral(()).with_cancel(token),
+            AgentInput::from_user_text("go"),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(
+        !events.iter().any(AgentEvent::is_terminal),
+        "a cancelled run ends with no terminal event"
+    );
+    assert_eq!(s_runs.load(Ordering::SeqCst), 0, "successor did not run");
+}

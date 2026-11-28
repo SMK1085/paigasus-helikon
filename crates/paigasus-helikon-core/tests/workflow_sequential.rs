@@ -207,3 +207,25 @@ async fn child_without_terminal_and_without_cancel_keeps_running() {
     ));
     assert_eq!(runs.load(Ordering::SeqCst), 2, "both children ran");
 }
+
+/// Regression guard: a token that fires after every child emitted its terminal
+/// event must not suppress the workflow's own `RunCompleted`.
+#[tokio::test]
+async fn cancel_after_every_child_terminal_still_completes() {
+    let first = MockAgent::new("first", |ctx| {
+        ctx.cancel().cancel();
+        common::msg_and_complete("first", "A", 0)
+    });
+    let second = MockAgent::new("second", |_| common::msg_and_complete("second", "B", 0));
+    let seq = SequentialAgent::new("seq", "").then(first).then(second);
+    let events: Vec<AgentEvent> = futures_util::StreamExt::collect(
+        seq.run(ctx(), AgentInput::from_user_text("go"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunCompleted { .. })
+    ));
+}
