@@ -375,3 +375,54 @@ async fn client_cancellation_aborts_the_run() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// Agent that cancels its own run token, streams some text and ends with no
+/// terminal event. The run token is a child of rmcp's request token, so the
+/// request stays open and the client still gets a result.
+struct CancelNoTerminalAgent;
+
+#[async_trait]
+impl Agent<()> for CancelNoTerminalAgent {
+    fn name(&self) -> &str {
+        "canceller"
+    }
+    fn description(&self) -> &str {
+        "cancels itself"
+    }
+    async fn run(
+        &self,
+        ctx: RunContext<()>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        let cancel = ctx.cancel().clone();
+        Ok(Box::pin(async_stream::stream! {
+            yield AgentEvent::MessageOutput {
+                item: Item::AssistantMessage {
+                    content: vec![ContentPart::Text { text: "partial".into() }],
+                    agent: Some("canceller".into()),
+                },
+            };
+            cancel.cancel();
+        }))
+    }
+}
+
+#[tokio::test]
+async fn cancelled_run_without_terminal_is_error() {
+    let server = McpAgentServer::with_default_ctx(CancelNoTerminalAgent);
+    let client = connect_client(server).await;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("canceller").with_arguments(
+                serde_json::json!({"input": "q"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    let text = result.content[0].as_text().unwrap().text.clone();
+    assert!(text.contains("cancelled"), "got: {text}");
+}
