@@ -66,7 +66,7 @@ A model turn can end with `FinishReason::Length` or `FinishReason::ContentFilter
 - Semantic items (carry a full `Item`): `MessageOutput { item }`, `ToolCallItem { item }`, `ToolOutputItem { item }`, `HandoffItem { from, to }`.
 - Transitions: `AgentUpdated { agent }`.
 - Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments; they are redacted when output redaction is on), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`, `UserMessageInjected { content }`.
-- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint. A cancelled run can end its stream with no terminal event. A runner such as `TokioRunner` reports this as `RunError::Cancelled`. If you wrap the `Agent::run` stream in `RunResultStreaming` with no runner, `RunResultStreaming::collect` returns `Ok`.
+- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint. A cancelled run can end its stream with no terminal event. The loop does this when the token fired before a model call, a tool batch, a handoff or a resume batch. It does this also when a model turn streamed with no `Finish` event. A runner such as `TokioRunner` reports this as `RunError::Cancelled`. If you wrap the `Agent::run` stream in `RunResultStreaming` with no runner, `RunResultStreaming::collect` returns `Ok`.
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
 
@@ -146,7 +146,7 @@ let config = RunConfig::new()
     .with_max_agent_depth(4);
 ```
 
-Cancellation is *not* a `RunConfig` field — the canonical `CancellationToken` lives on `RunContext`. Cancellation and timeout are best-effort: a genuine terminal event that already occurred wins over a late cancel or timeout, so a caller cannot assume that calling `cancel()` always yields `RunError::Cancelled`.
+Cancellation is *not* a `RunConfig` field — the canonical `CancellationToken` lives on `RunContext`. A terminal event that already happened wins over a later cancel. Otherwise, through a runner, a fired token ends the run as `RunError::Cancelled`. This is true also when the token fired before the run started. Timeout stays best-effort: a genuine terminal event that already occurred wins over a late timeout.
 
 ## Turn-boundary checkpoint
 
