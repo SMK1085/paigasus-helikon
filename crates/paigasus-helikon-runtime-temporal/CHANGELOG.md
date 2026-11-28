@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.7.3...paigasus-helikon-runtime-temporal-v0.7.4) - 2026-11-28
+
+### Fixed
+
+- *(core)* SMA-864 do not run tool calls from a cut or filtered model turn ([#406](https://github.com/SMK1085/paigasus-helikon/pull/406))
+
 ### Upgrade notes
 
 - The core rule that a `Length` or `ContentFilter` turn with tool calls fails the run is replay-breaking for a Temporal run that is in progress. On replay, `transition` fails the run at that turn, so Temporal reports a non-determinism error.

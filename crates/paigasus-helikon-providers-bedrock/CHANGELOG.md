@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.7...paigasus-helikon-providers-bedrock-v0.3.8) - 2026-11-28
+
+### Fixed
+
+- *(core)* SMA-864 do not run tool calls from a cut or filtered model turn ([#406](https://github.com/SMK1085/paigasus-helikon/pull/406))
+
 ### Upgrade notes
 
 - `model_context_window_exceeded` now maps to `FinishReason::Length` (was `Other`). A turn with tool calls and this stop reason now fails with `AgentError::ToolCallsNotRun`.

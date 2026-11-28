@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.10.0...paigasus-helikon-v0.10.1) - 2026-11-28
+
+### Other
+
+- updated the following local packages: paigasus-helikon-core, paigasus-helikon-runtime-tokio, paigasus-helikon-providers-anthropic, paigasus-helikon-providers-bedrock, paigasus-helikon-providers-gemini, paigasus-helikon-providers-litellm, paigasus-helikon-runtime-temporal, paigasus-helikon-evals, paigasus-helikon-mcp, paigasus-helikon-providers-openai, paigasus-helikon-runtime-actix, paigasus-helikon-runtime-axum, paigasus-helikon-runtime-agentcore, paigasus-helikon-sessions-postgres, paigasus-helikon-sessions-redis, paigasus-helikon-sessions-sqlite, paigasus-helikon-tools
+
 ## [0.10.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.9.7...paigasus-helikon-v0.10.0) - 2026-11-27
 
 ### Other
