@@ -249,3 +249,89 @@ pub fn text_agent<M: Model + 'static>(
         _output: std::marker::PhantomData,
     }
 }
+
+/// One step of a `CancelScriptModel` turn.
+pub enum Step {
+    /// Yield this event, unless the token already fired.
+    Emit(ModelEvent),
+    /// Fire the run token. Later steps see a fired token.
+    Cancel,
+    /// Yield this error.
+    Fail(ModelError),
+}
+
+/// A model that obeys its token: before each step it checks the token and
+/// ends the stream (no `Finish`) when the token fired. One script per
+/// `invoke`; every `invoke` increments `calls`.
+pub struct CancelScriptModel {
+    scripts: Mutex<VecDeque<Vec<Step>>>,
+    token: CancellationToken,
+    calls: AtomicUsize,
+    invoke_error: Mutex<Option<ModelError>>,
+}
+
+impl CancelScriptModel {
+    pub fn new(token: CancellationToken, scripts: Vec<Vec<Step>>) -> Arc<Self> {
+        Arc::new(Self {
+            scripts: Mutex::new(VecDeque::from(scripts)),
+            token,
+            calls: AtomicUsize::new(0),
+            invoke_error: Mutex::new(None),
+        })
+    }
+
+    /// `invoke` fires the token, then returns `Err(e)`.
+    pub fn invoke_error_after_cancel(token: CancellationToken, e: ModelError) -> Arc<Self> {
+        Arc::new(Self {
+            scripts: Mutex::new(VecDeque::new()),
+            token,
+            calls: AtomicUsize::new(0),
+            invoke_error: Mutex::new(Some(e)),
+        })
+    }
+
+    /// The number of `invoke` calls so far.
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl Model for CancelScriptModel {
+    async fn invoke(
+        &self,
+        _request: ModelRequest,
+        _cancel: CancellationToken,
+    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(e) = self.invoke_error.lock().unwrap().take() {
+            self.token.cancel();
+            return Err(e);
+        }
+        let script = self
+            .scripts
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| ModelError::Other(anyhow::anyhow!("no more scripted responses")))?;
+        let token = self.token.clone();
+        Ok(Box::pin(async_stream::stream! {
+            for step in script {
+                match step {
+                    Step::Emit(ev) => {
+                        if token.is_cancelled() {
+                            return;
+                        }
+                        yield Ok(ev);
+                    }
+                    Step::Cancel => token.cancel(),
+                    Step::Fail(e) => yield Err(e),
+                }
+            }
+        }))
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}

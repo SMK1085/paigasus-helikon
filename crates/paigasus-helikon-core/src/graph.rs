@@ -241,6 +241,7 @@ where
             let mut finals: Vec<Option<String>> = vec![None; n];
             let mut skipped = vec![false; n];
             let mut failed_nodes: Vec<usize> = Vec::new();
+            let mut terminal_seen = vec![false; n];
             let mut failures: Vec<Option<crate::FailureSlot>> = vec![None; n];
             let mut total = TokenUsage::default();
             let mut running = futures_util::stream::SelectAll::new();
@@ -272,8 +273,11 @@ where
                     node_input.messages = messages;
 
                     match nodes[i].1.run(child, node_input).instrument(span.clone()).await {
-                        Ok(s) => running.push(Box::pin(s.map(move |ev| (i, ev)))
-                            as BoxStream<'static, (usize, AgentEvent)>),
+                        Ok(s) => running.push(Box::pin(
+                            s.map(move |ev| (i, Some(ev)))
+                                .chain(futures_util::stream::once(async move { (i, None) })),
+                        )
+                            as BoxStream<'static, (usize, Option<AgentEvent>)>),
                         Err(e) => {
                             failed_nodes.push(i);
                             // Record into the node's own slot so the aggregate
@@ -291,6 +295,17 @@ where
                 let Some((i, ev)) = running.next().instrument(span.clone()).await else {
                     break;
                 };
+                // `None` marks the end of node `i`'s stream.
+                let Some(ev) = ev else {
+                    // Same rule as `AgentAsTool`: a cancelled node with no
+                    // terminal event ends this run with no terminal event,
+                    // before any successor starts.
+                    if !terminal_seen[i] && ctx.cancel().is_cancelled() {
+                        return;
+                    }
+                    continue;
+                };
+                terminal_seen[i] |= ev.is_terminal();
                 match ev {
                     AgentEvent::RunStarted { .. } => {}
                     AgentEvent::MessageOutput { item } => {

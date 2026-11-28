@@ -342,15 +342,13 @@ awaited — a consumer that stops polling never learns the stream has ended,
 which is all a synchronous scripted stream can offer. An `invoke` called with
 an already-cancelled token yields an empty stream but still consumes its
 script, so "one script per `invoke`" holds regardless of cancellation timing.
+Through an agent, the loop makes no `invoke` for a turn that starts after the
+cancel. That turn uses no script.
 
-Cancellation is a *model*-boundary event, not a run-level one: the loop treats
-the truncated turn as a complete turn. If the cut lands mid-JSON, `build_items`
-fails to parse the partial `args_delta` and the run fails with `invalid tool
-args for call_id=…` — matching what a real provider does when a connection
-drops mid-call, now reproducible deterministically. If the cut lands on a
-syntactically complete (or empty, hence normalized to `{}`) argument string,
-the tool call is well-formed and **the loop executes it**. Neither is specific
-to `MockModel`; both are what a real provider produces from the same cut.
+A cancel before a terminal event ends the run. When the model stream ends with no `Finish` event and
+the token fired, the loop emits no terminal event. A runner then reports
+`RunError::Cancelled`. No tool call of a cut turn runs. This is true also when
+the cut lands on a complete argument string.
 
 ### `EvalRun`
 

@@ -201,7 +201,9 @@ where
 
                 let mut last_text = String::new();
                 let mut failed = false;
+                let mut saw_terminal = false;
                 while let Some(ev) = sub.next().instrument(span.clone()).await {
+                    saw_terminal |= ev.is_terminal();
                     match ev {
                         AgentEvent::RunStarted { .. } => {}
                         AgentEvent::RunCompleted { usage } => total.add(usage),
@@ -227,6 +229,12 @@ where
                             agent: agent.name().to_owned(),
                         })
                         .await;
+                }
+
+                // Same rule as `AgentAsTool`: a cancelled child with no terminal
+                // event ends this run with no terminal event too.
+                if !saw_terminal && ctx.cancel().is_cancelled() {
+                    return;
                 }
 
                 if failed {
@@ -386,8 +394,10 @@ where
             let mut completed: std::collections::BTreeMap<String, String> =
                 std::collections::BTreeMap::new();
             let mut saw_failure = false;
+            let mut terminal_seen = vec![false; branches.len()];
 
             while let Some((i, ev)) = merged.next().instrument(span.clone()).await {
+                terminal_seen[i] |= ev.is_terminal();
                 match ev {
                     AgentEvent::RunStarted { .. } => {}
                     AgentEvent::RunCompleted { usage } => {
@@ -424,6 +434,12 @@ where
                     }
                     other => yield other,
                 }
+            }
+
+            // Same rule as `AgentAsTool`: a cancelled branch with no terminal
+            // event ends this run with no terminal event too.
+            if ctx.cancel().is_cancelled() && terminal_seen.iter().any(|t| !t) {
+                return;
             }
 
             let mut first_err: Option<AgentError> = None;
@@ -584,7 +600,9 @@ where
 
                     let mut last_text = String::new();
                     let mut failed = false;
+                    let mut saw_terminal = false;
                     while let Some(ev) = sub.next().instrument(span.clone()).await {
+                        saw_terminal |= ev.is_terminal();
                         match ev {
                             AgentEvent::RunStarted { .. } => {}
                             AgentEvent::RunCompleted { usage } => total.add(usage),
@@ -610,6 +628,12 @@ where
                                 agent: agent.name().to_owned(),
                             })
                             .await;
+                    }
+
+                    // Same rule as `AgentAsTool`: a cancelled child with no terminal
+                    // event ends this run with no terminal event too.
+                    if !saw_terminal && ctx.cancel().is_cancelled() {
+                        return;
                     }
 
                     if failed {

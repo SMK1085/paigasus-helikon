@@ -236,3 +236,94 @@ async fn graph_agent_rejects_resolutions() {
         "no child ran"
     );
 }
+
+#[tokio::test]
+async fn cancelled_node_ends_graph_with_no_terminal() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let token = paigasus_helikon_core::CancellationToken::new();
+    token.cancel();
+    let b_runs = Arc::new(AtomicUsize::new(0));
+    let r = b_runs.clone();
+    let g = GraphAgent::builder()
+        .name("g")
+        .node(
+            "a",
+            common::MockAgent::new("a", |_| vec![common::assistant_msg("a", "partial")]),
+        )
+        .node(
+            "b",
+            common::MockAgent::new("b", move |_| {
+                r.fetch_add(1, Ordering::SeqCst);
+                vec![common::assistant_msg("b", "partial")]
+            }),
+        )
+        .edge("a", "b")
+        .build()
+        .unwrap();
+    let events: Vec<AgentEvent> = g
+        .run(
+            RunContext::ephemeral(()).with_cancel(token),
+            AgentInput::from_user_text("go"),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(
+        !events.iter().any(AgentEvent::is_terminal),
+        "a cancelled run ends with no terminal event"
+    );
+    assert_eq!(b_runs.load(Ordering::SeqCst), 0, "b did not run");
+}
+
+// This test depends on three facts. `SelectAll` polls the node streams in FIFO
+// order. The node `cut` is declared before `done`. The stream of `cut` yields
+// fewer events than the stream of `done`. So the end marker of `cut` comes
+// before the `RunCompleted` of `done`. If the order changes, `succ` starts and
+// the test fails. A `futures-util` update can change the poll order.
+#[tokio::test]
+async fn cancelled_root_stops_graph_before_sibling_successor_starts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let token = paigasus_helikon_core::CancellationToken::new();
+    token.cancel();
+    let s_runs = Arc::new(AtomicUsize::new(0));
+    let r = s_runs.clone();
+    let g = GraphAgent::builder()
+        .name("g")
+        .node(
+            "cut",
+            common::MockAgent::new("cut", |_| vec![common::assistant_msg("cut", "partial")]),
+        )
+        .node(
+            "done",
+            common::MockAgent::new("done", |_| common::msg_and_complete("done", "ok", 0)),
+        )
+        .node(
+            "succ",
+            common::MockAgent::new("succ", move |_| {
+                r.fetch_add(1, Ordering::SeqCst);
+                common::msg_and_complete("succ", "ok", 0)
+            }),
+        )
+        .edge("done", "succ")
+        .build()
+        .unwrap();
+    let events: Vec<AgentEvent> = g
+        .run(
+            RunContext::ephemeral(()).with_cancel(token),
+            AgentInput::from_user_text("go"),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(
+        !events.iter().any(AgentEvent::is_terminal),
+        "a cancelled run ends with no terminal event"
+    );
+    assert_eq!(s_runs.load(Ordering::SeqCst), 0, "successor did not run");
+}

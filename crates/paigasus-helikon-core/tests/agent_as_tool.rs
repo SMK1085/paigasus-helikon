@@ -242,3 +242,48 @@ async fn agent_as_tool_cancelled_sub_run_is_a_tool_error() {
         .expect_err("a cancelled sub-run is not a successful tool result");
     assert!(err.to_string().contains("cancelled"), "got: {err}");
 }
+
+/// A model that streams one text delta, cancels the run during the stream,
+/// and ends the stream with no `Finish`, as the `Model` contract says.
+struct CancelAfterText(CancellationToken);
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::Model for CancelAfterText {
+    async fn invoke(
+        &self,
+        _request: paigasus_helikon_core::ModelRequest,
+        _cancel: CancellationToken,
+    ) -> Result<
+        futures_core::stream::BoxStream<
+            'static,
+            Result<ModelEvent, paigasus_helikon_core::ModelError>,
+        >,
+        paigasus_helikon_core::ModelError,
+    > {
+        let token = self.0.clone();
+        Ok(Box::pin(async_stream::stream! {
+            yield Ok(ModelEvent::TokenDelta { text: "part".to_owned() });
+            token.cancel();
+        }))
+    }
+
+    fn capabilities(&self) -> paigasus_helikon_core::ModelCapabilities {
+        paigasus_helikon_core::ModelCapabilities::default()
+    }
+}
+
+#[tokio::test]
+async fn agent_as_tool_cancelled_text_only_sub_run_is_a_tool_error() {
+    let cancel = CancellationToken::new();
+    let sub = LlmAgent::builder::<()>()
+        .name("sub")
+        .shared_model(Arc::new(CancelAfterText(cancel.clone())))
+        .build();
+    let tool = AgentAsTool::new(sub);
+    let tc: ToolContext<()> = ToolContext::new(Arc::new(()), TracerHandle::default(), cancel, 0, 8);
+    let err = tool
+        .invoke(&tc, serde_json::json!({ "input": "go" }))
+        .await
+        .expect_err("a cancelled text-only sub-run is not a successful tool result");
+    assert!(err.to_string().contains("cancelled"), "got: {err}");
+}

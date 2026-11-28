@@ -1110,7 +1110,28 @@ where
                         yield crate::AgentEvent::RunFailed { error: msg };
                         return;
                     }
+                    // A cancel before the handoff runs no approved call.
+                    if ctx.cancel().is_cancelled() {
+                        for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
+                        for ev in not_run {
+                            yield ev;
+                        }
+                        return;
+                    }
                     yield crate::AgentEvent::AgentUpdated { agent: next.clone() };
+                    // A consumer can cancel while `AgentUpdated` is delivered.
+                    // Check again so the target does not start after a cancel.
+                    if ctx.cancel().is_cancelled() {
+                        for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
+                        for ev in not_run {
+                            yield ev;
+                        }
+                        return;
+                    }
                     let child_input = crate::AgentInput {
                         messages: resume_messages,
                         resume_plan: Some(plan.descend()),
@@ -1166,6 +1187,13 @@ where
                 let results_at = results_at + closed.len();
                 for item in closed {
                     yield crate::AgentEvent::ToolOutputItem { item };
+                }
+                // A cancel before the calls run starts none of them.
+                if ctx.cancel().is_cancelled() {
+                    for ev in not_run {
+                        yield ev;
+                    }
+                    return;
                 }
                 let tool_ctx = ctx.to_tool_context();
                 let (outcomes, denied) = crate::resume_exec::run_resolved_calls(
@@ -1248,6 +1276,12 @@ where
                 for ev in events {
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
+                            // A token that fired before this turn must not start it:
+                            // no checkpoint, no span, no hook. `TurnStarted` is not
+                            // yielded; the runner's interrupt ends the run as `Cancelled`.
+                            if ctx.cancel().is_cancelled() {
+                                return;
+                            }
                             // SMA-804: turn-boundary checkpoint. The batch that
                             // closes a tool turn and opens the next model turn
                             // is the boundary; the checkpoint runs before the
@@ -1428,6 +1462,14 @@ where
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {
+                        // A token that fired before this call must not start a model
+                        // call. End the stream with no terminal event, so the runner's
+                        // interrupt wins and the run ends as `Cancelled`.
+                        // This check covers a cancel from the `OnTurnStart` hook and the repair
+                        // turn, which has no `TurnStarted`. It is also defence in depth.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let mut request = request;
                         for text in pending_injections.drain(..) {
                             request.messages.push(crate::Item::System {
@@ -1453,6 +1495,11 @@ where
                         let mut model_stream = match model.invoke(request, cancel).await {
                             Ok(s) => s,
                             Err(e) => {
+                                // An error that follows a cancel is a result of the
+                                // cancel. End with no terminal event: the run is `Cancelled`.
+                                if ctx.cancel().is_cancelled() {
+                                    return;
+                                }
                                 let msg = e.to_string();
                                 chat_span.record("otel.status_code", "ERROR");
                                 run_span.record("otel.status_code", "ERROR");
@@ -1492,6 +1539,11 @@ where
                                     }
                                 }
                                 Err(e) => {
+                                    // A stream error that follows a cancel is a result of
+                                    // the cancel. End with no terminal event.
+                                    if ctx.cancel().is_cancelled() {
+                                        return;
+                                    }
                                     let msg = e.to_string();
                                     chat_span.record("otel.status_code", "ERROR");
                                     run_span.record("otel.status_code", "ERROR");
@@ -1506,6 +1558,11 @@ where
                         let cut_reason = acc.finish_reason().clone();
                         let cut_names = acc.tool_call_names();
                         let finish_seen = acc.finish_seen();
+                        // A stream that ends with no `Finish` after a cancel is a cut
+                        // turn. Do not store it. End with no terminal event.
+                        if !finish_seen && ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
                             Ok(turn) => turn,
                             Err(e) => {
@@ -1561,6 +1618,10 @@ where
                         };
                     }
                     crate::NextAction::ExecuteTools { calls } => {
+                        // A token that fired before the tools run must not start them.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let tool_ctx = ctx.to_tool_context();
                         let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
                         let (results, denied) = run_tools_concurrent(
@@ -1629,6 +1690,10 @@ where
                         return;
                     }
                     crate::NextAction::Handoff => {
+                        // A token that fired before the handoff must not start it.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let (target, transcript, parent_usage) = match loop_state {
                             crate::LoopState::ApplyingHandoff {
                                 target,
@@ -1692,6 +1757,11 @@ where
                             to: target.clone(),
                         };
 
+                        // A consumer can cancel while `HandoffItem` is delivered.
+                        // Check again so the target does not start after a cancel.
+                        if ctx.cancel().is_cancelled() {
+                            return;
+                        }
                         let input = crate::AgentInput { messages: transcript, ..Default::default() };
                         // Starting the child emits no event. Start it before the
                         // transfer results, because their text tells whether

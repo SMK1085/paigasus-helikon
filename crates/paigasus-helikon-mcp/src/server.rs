@@ -362,9 +362,18 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
         // handler always runs the agent to completion inline, so every path is
         // `Complete` — the same value the rmcp 2 signature returned directly.
         match outcome {
-            Ok(result) => Ok(CallToolResponse::Complete(CallToolResult::success(vec![
-                ContentBlock::text(result.final_output),
-            ]))),
+            Ok(result) => {
+                // A cancelled run can end its stream with no terminal event. Do
+                // not return its partial text as a successful answer.
+                if cancel.is_cancelled() && !result.events.iter().any(|e| e.is_terminal()) {
+                    return Ok(CallToolResponse::Complete(CallToolResult::error(vec![
+                        ContentBlock::text("agent run was cancelled"),
+                    ])));
+                }
+                Ok(CallToolResponse::Complete(CallToolResult::success(vec![
+                    ContentBlock::text(result.final_output),
+                ])))
+            }
             Err(e) => Ok(CallToolResponse::Complete(CallToolResult::error(vec![
                 ContentBlock::text(format!("agent run failed: {e}")),
             ]))),

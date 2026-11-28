@@ -161,3 +161,31 @@ async fn parallel_agent_rejects_resolutions() {
         "no child ran"
     );
 }
+
+#[tokio::test]
+async fn cancelled_branch_ends_parallel_with_no_terminal() {
+    let token = paigasus_helikon_core::CancellationToken::new();
+    token.cancel();
+    let par = ParallelAgent::new("par", "")
+        .branch(
+            "a",
+            MockAgent::new("a", |_| vec![common::assistant_msg("a", "partial")]),
+        )
+        .branch(
+            "b",
+            MockAgent::new("b", |_| vec![common::assistant_msg("b", "partial")]),
+        );
+    let events: Vec<AgentEvent> = par
+        .run(
+            RunContext::ephemeral(()).with_cancel(token),
+            AgentInput::from_user_text("go"),
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(
+        !events.iter().any(AgentEvent::is_terminal),
+        "a cancelled run ends with no terminal event"
+    );
+}
